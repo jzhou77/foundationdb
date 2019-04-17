@@ -310,12 +310,23 @@ public:
 	//   See IFailureMonitor::onFailedFor() for an explanation of the duration and slope parameters.
 	template <class X>
 	Future<ErrorOr<REPLY_TYPE(X)>> getReplyUnlessFailedFor(const X& value, double sustainedFailureDuration, double sustainedFailureSlope, int taskID) const {
-		return waitValueOrSignal(getReply(value, taskID), makeDependent<T>(IFailureMonitor::failureMonitor()).onFailedFor(getEndpoint(taskID), sustainedFailureDuration, sustainedFailureSlope), getEndpoint(taskID));
+		// If it is local endpoint, no need for failure monitoring
+		return waitValueOrSignal(getReply(value, taskID),
+				makeDependent<T>(IFailureMonitor::failureMonitor()).onFailedFor(getEndpoint(taskID), sustainedFailureDuration, sustainedFailureSlope),
+				getEndpoint(taskID));
 	}
 
 	template <class X>
 	Future<ErrorOr<REPLY_TYPE(X)>> getReplyUnlessFailedFor(const X& value, double sustainedFailureDuration, double sustainedFailureSlope) const {
-		return waitValueOrSignal(getReply(value), makeDependent<T>(IFailureMonitor::failureMonitor()).onFailedFor(getEndpoint(), sustainedFailureDuration, sustainedFailureSlope), getEndpoint());
+		// If it is local endpoint, no need for failure monitoring
+		return waitValueOrSignal(getReply(value),
+				makeDependent<T>(IFailureMonitor::failureMonitor()).onFailedFor(getEndpoint(), sustainedFailureDuration, sustainedFailureSlope),
+				getEndpoint());
+	}
+
+	template <class X>
+	Future<ErrorOr<X>> getReplyUnlessFailedFor(double sustainedFailureDuration, double sustainedFailureSlope) const {
+		return getReplyUnlessFailedFor(ReplyPromise<X>(), sustainedFailureDuration, sustainedFailureSlope);
 	}
 
 	explicit RequestStream(const Endpoint& endpoint) : queue(new NetNotifiedQueue<T>(0, 1, endpoint)) {}
