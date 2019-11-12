@@ -196,3 +196,37 @@ function(create_test_package)
   add_custom_target(package_tests DEPENDS ${tar_file})
   add_dependencies(package_tests strip_fdbserver)
 endfunction()
+
+function(create_binding_test_package)
+  list(APPEND out_files)
+  foreach(dir IN LISTS TEST_PACKAGE_ADD_DIRECTORIES)
+    file(GLOB_RECURSE files ${dir}/*)
+    string(LENGTH ${dir} dir_len)
+    foreach(file IN LISTS files)
+      get_filename_component(src_dir ${file} DIRECTORY)
+      # We need to make sure that ${src_dir} is at least
+      # as long as ${dir}. Otherwise the later call to
+      # SUBSTRING will fail
+      set(src_dir "${src_dir}/")
+      string(SUBSTRING ${src_dir} ${dir_len} -1 dest_dir)
+      string(SUBSTRING ${file} ${dir_len} -1 out_file)
+      list(APPEND external_files ${CMAKE_BINARY_DIR}/packages/${out_file})
+      file(COPY ${file} DESTINATION ${CMAKE_BINARY_DIR}/packages/${dest_dir})
+    endforeach()
+  endforeach()
+  set(tar_file ${CMAKE_BINARY_DIR}/packages/bindingtester.tar.gz)
+  add_custom_command(
+    OUTPUT ${tar_file}
+    COMMAND ${CMAKE_COMMAND} -E tar cfz ${tar_file}
+    ${CMAKE_BINARY_DIR}/packages/bin/fdbserver
+    ${CMAKE_BINARY_DIR}/packages/bin/fdbcli
+    ${CMAKE_BINARY_DIR}/packages/lib/libfdb_c.so
+    ${out_files} ${external_files}
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/packages
+    COMMENT "Package bindingtester archive"
+    )
+  add_custom_target(binding_tests DEPENDS ${tar_file})
+  add_dependencies(binding_tests strip_fdbserver)
+  add_dependencies(binding_tests strip_fdbcli)
+  add_dependencies(binding_tests strip_fdb_c)
+endfunction()
