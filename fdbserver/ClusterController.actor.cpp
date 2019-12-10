@@ -889,6 +889,14 @@ public:
 						for(int i = 0; i < oldLogRouters.size(); i++) {
 							result.oldLogRouters.push_back(oldLogRouters[i].interf);
 						}
+
+						const int nBackup = std::max<int>(tlogs.size(), req.maxOldLogRouters);
+						auto backupWorkers = getWorkersForRoleInDatacenter(dcId, ProcessClass::Backup, nBackup,
+						                                                   req.configuration, id_used);
+						std::transform(backupWorkers.begin(), backupWorkers.end(),
+						               std::back_inserter(result.backupWorkers),
+						               [](const WorkerDetails& w) { return w.interf; });
+
 						break;
 					} else {
 						if(fitness < bestFitness) {
