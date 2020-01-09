@@ -111,7 +111,9 @@ struct BackupData {
 	}
 };
 
-ACTOR Future<Void> monitorBackupStarted(BackupData* self) {
+// Monitors "backupStartedKey". If "started" is true, wait until the key is set;
+// otherwise, wait until the key is cleared.
+ACTOR Future<Void> monitorBackupChanges(BackupData* self, bool started) {
 	loop {
 		state ReadYourWritesTransaction tr(self->cx);
 
@@ -119,7 +121,9 @@ ACTOR Future<Void> monitorBackupStarted(BackupData* self) {
 			try {
 				tr.setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
 				Optional<Standalone<StringRef>> value = wait(tr.get(backupStartedKey));
-				if (value.present()) return Void();
+				if ((value.present() && started) || (!value.present() && !started)) {
+					return Void();
+				}
 
 				state Future<Void> watchFuture = tr.watch(backupStartedKey);
 				wait(tr.commit());
@@ -315,7 +319,6 @@ ACTOR Future<Void> pullAsyncData(BackupData* self) {
 	state Future<Void> logSystemChange = Void();
 	state Reference<ILogSystem::IPeekCursor> r;
 	state Version tagAt = self->startVersion;
-	state Version lastVersion = 0;
 
 	loop {
 		loop choose {
@@ -340,7 +343,7 @@ ACTOR Future<Void> pullAsyncData(BackupData* self) {
 			r->nextMessage();
 		}
 
-		tagAt = std::max(r->version().version, lastVersion);
+		tagAt = r->version().version;
 		self->lastSeenVersion = std::max(tagAt, self->lastSeenVersion);
 		TraceEvent("BackupWorkerGot", self->myId).suppressFor(1.0).detail("V", tagAt);
 		if (self->endVersion.present() && tagAt > self->endVersion.get()) {
@@ -359,8 +362,7 @@ ACTOR Future<Void> pullAsyncData(BackupData* self) {
 
 ACTOR Future<Void> monitorBackupKeyOrPullData(BackupData* self) {
 	loop {
-		state Future<Void> started = monitorBackupStarted(self);
-
+		state Future<Void> started = monitorBackupChanges(self, true);
 		loop {
 			GetReadVersionRequest request(1, GetReadVersionRequest::PRIORITY_DEFAULT |
 			                                     GetReadVersionRequest::FLAG_USE_MIN_KNOWN_COMMITTED_VERSION);
@@ -380,7 +382,11 @@ ACTOR Future<Void> monitorBackupKeyOrPullData(BackupData* self) {
 		}
 
 		TraceEvent("BackupWorkerStartPullData", self->myId);
-		wait(pullAsyncData(self));
+
+		Future<Void> stopped = monitorBackupChanges(self, false);
+		state Future<Void> pullFinished = pullAsyncData(self);
+		wait(stopped || pullFinished);
+		if (pullFinished.isReady()) return Void(); // backup is done for some old epoch.
 	}
 }
 
