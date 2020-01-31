@@ -513,18 +513,19 @@ public:
 		return writeKeyspaceSnapshotFile_impl(Reference<BackupContainerFileSystem>::addRef(this), fileNames, totalBytes);
 	};
 
-	// List log files, unsorted, which contain data at any version >= beginVersion and <= targetVersion
-	Future<std::vector<LogFile>> listLogFiles(Version beginVersion = 0, Version targetVersion = std::numeric_limits<Version>::max()) {
-		// The first relevant log file could have a begin version less than beginVersion based on the knobs which determine log file range size,
-		// so start at an earlier version adjusted by how many versions a file could contain.
+	// List log files, unsorted, which contain data at any version >= beginVersion and <= targetVersion.
+	// "taggedLogs" flag indicates if new tagged mutation logs or old logs should be listed.
+	Future<std::vector<LogFile>> listLogFiles(Version beginVersion, Version targetVersion, bool taggedLogs) {
+		// The first relevant log file could have a begin version less than beginVersion based on the knobs which
+		// determine log file range size, so start at an earlier version adjusted by how many versions a file could
+		// contain.
 		//
 		// Get the cleaned (without slashes) first and last folders that could contain relevant results.
-		bool mlogs = false; // tagged mutation logs
 		std::string firstPath = cleanFolderString(
 		    logVersionFolderString(std::max<Version>(0, beginVersion - CLIENT_KNOBS->BACKUP_MAX_LOG_RANGES *
 		                                                                   CLIENT_KNOBS->LOG_RANGE_BLOCK_SIZE),
-		                           mlogs));
-		std::string lastPath = cleanFolderString(logVersionFolderString(targetVersion, mlogs));
+		                           taggedLogs));
+		std::string lastPath = cleanFolderString(logVersionFolderString(targetVersion, taggedLogs));
 
 		std::function<bool(std::string const &)> pathFilter = [=](const std::string &folderPath) {
 			// Remove slashes in the given folder path so that the '/' positions in the version folder string do not matter
@@ -534,7 +535,7 @@ public:
 				|| (cleaned > firstPath && cleaned < lastPath);
 		};
 
-		return map(listFiles("logs/", pathFilter), [=](const FilesAndSizesT &files) {
+		return map(listFiles((taggedLogs ? "mlogs/" : "logs/"), pathFilter), [=](const FilesAndSizesT& files) {
 			std::vector<LogFile> results;
 			LogFile lf;
 			for(auto &f : files) {
@@ -621,11 +622,12 @@ public:
 	ACTOR static Future<BackupFileList> dumpFileList_impl(Reference<BackupContainerFileSystem> bc, Version begin, Version end) {
 		state Future<std::vector<RangeFile>> fRanges = bc->listRangeFiles(begin, end);
 		state Future<std::vector<KeyspaceSnapshotFile>> fSnapshots = bc->listKeyspaceSnapshots(begin, end);
-		state Future<std::vector<LogFile>> fLogs = bc->listLogFiles(begin, end);
+		state Future<std::vector<LogFile>> fLogs = bc->listLogFiles(begin, end, false);
+		state Future<std::vector<LogFile>> fTaggedLogs = bc->listLogFiles(begin, end, true);
 
-		wait(success(fRanges) && success(fSnapshots) && success(fLogs));
+		wait(success(fRanges) && success(fSnapshots) && success(fLogs) && success(fTaggedLogs));
 
-		return BackupFileList({fRanges.get(), fLogs.get(), fSnapshots.get()});
+		return BackupFileList({fRanges.get(), fLogs.get(), fTaggedLogs.get(), fSnapshots.get()});
 	}
 
 	Future<BackupFileList> dumpFileList(Version begin, Version end) override {
@@ -752,7 +754,11 @@ public:
 		}
 
 		state std::vector<LogFile> logs;
-		wait(store(logs, bc->listLogFiles(scanBegin, scanEnd)) && store(desc.snapshots, bc->listKeyspaceSnapshots()));
+		state std::vector<LogFile> tagLogs;
+		wait(store(logs, bc->listLogFiles(scanBegin, scanEnd, false)) &&
+		     store(tagLogs, bc->listLogFiles(scanBegin, scanEnd, true)) &&
+		     store(desc.snapshots, bc->listKeyspaceSnapshots()));
+		logs.insert(logs.end(), std::make_move_iterator(tagLogs.begin()), std::make_move_iterator(tagLogs.end()));
 
 		// List logs in version order so log continuity can be analyzed
 		std::sort(logs.begin(), logs.end());
@@ -906,13 +912,17 @@ public:
 			.detail("ScanBeginVersion", scanBegin);
 
 		state std::vector<LogFile> logs;
+		state std::vector<LogFile> tagLogs;
 		state std::vector<RangeFile> ranges;
 
 		if(progress != nullptr) {
 			progress->step = "Listing files";
 		}
 		// Get log files or range files that contain any data at or before expireEndVersion
-		wait(store(logs, bc->listLogFiles(scanBegin, expireEndVersion - 1)) && store(ranges, bc->listRangeFiles(scanBegin, expireEndVersion - 1)));
+		wait(store(logs, bc->listLogFiles(scanBegin, expireEndVersion - 1, false)) &&
+		     store(tagLogs, bc->listLogFiles(scanBegin, expireEndVersion - 1, true)) &&
+		     store(ranges, bc->listRangeFiles(scanBegin, expireEndVersion - 1)));
+		logs.insert(logs.end(), std::make_move_iterator(tagLogs.begin()), std::make_move_iterator(tagLogs.end()));
 
 		// The new logBeginVersion will be taken from the last log file, if there is one
 		state Optional<Version> newLogBeginVersion;
@@ -1052,7 +1062,8 @@ public:
 				return Optional<RestorableFileSet>(restorable);
 			}
 
-			state std::vector<LogFile> logs = wait(bc->listLogFiles(snapshot.get().beginVersion, targetVersion));
+			// TODO: check if tagged logs
+			state std::vector<LogFile> logs = wait(bc->listLogFiles(snapshot.get().beginVersion, targetVersion, false));
 
 			// List logs in version order so log continuity can be analyzed
 			std::sort(logs.begin(), logs.end());

@@ -140,6 +140,7 @@ struct KeyspaceSnapshotFile {
 struct BackupFileList {
 	std::vector<RangeFile> ranges;
 	std::vector<LogFile> logs;
+	std::vector<LogFile> taggedLogs; // tagged mutation logs
 	std::vector<KeyspaceSnapshotFile> snapshots;
 
 	void toStream(FILE *fout) const;
