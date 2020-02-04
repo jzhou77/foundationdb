@@ -123,6 +123,7 @@ void handleRestoreSysInfoRequest(const RestoreSysInfoRequest& req, Reference<Res
 	req.reply.send(RestoreCommonReply(self->id()));
 }
 
+// TODO for Jingyu: For new backup format, we need to parse backup data differently in this actor.
 ACTOR Future<Void> _processLoadingParam(LoadingParam param, Reference<RestoreLoaderData> self) {
 	// Temporary data structure for parsing log files into (version, <K, V, mutationType>)
 	// Must use StandAlone to save mutations, otherwise, the mutationref memory will be corrupted
@@ -414,12 +415,12 @@ bool concatenateBackupMutationForLogFile(std::map<Standalone<StringRef>, Standal
 
 // Parse the kv pair (version, serialized_mutation), which are the results parsed from log file, into
 // (version, <K, V, mutationType>) pair;
-// Put the parsed versioned mutations into *pkvOps.
-// 
+// Put the parsed versioned mutations into kvOpsIter->second.
+//
 // Input key: [commitVersion_of_the_mutation_batch:uint64_t];
 // Input value: [includeVersion:uint64_t][val_length:uint32_t][encoded_list_of_mutations], where
 // includeVersion is the serialized version in the batch commit. It is not the commitVersion in Input key.
-// 
+//
 // val_length is always equal to (val.size() - 12); otherwise,
 // we may not get the entire mutation list for the version encoded_list_of_mutations:
 // [mutation1][mutation2]...[mutationk], where
@@ -489,6 +490,11 @@ void _parseSerializedMutation(std::map<LoadingParam, VersionedMutationsMap>::ite
 }
 
 // Parsing the data blocks in a range file
+// kvOpsIter: saves the parsed versioned-mutations for the sepcific LoadingParam;
+// samplesIter: saves the sampled mutations from the parsed versioned-mutations;
+// bc: backup container to read the backup file
+// version: the version the parsed mutations should be at
+// asset: RestoreAsset about which backup data should be parsed
 ACTOR static Future<Void> _parseRangeFileToMutationsOnLoader(
     std::map<LoadingParam, VersionedMutationsMap>::iterator kvOpsIter,
     std::map<LoadingParam, MutationsVec>::iterator samplesIter, Reference<IBackupContainer> bc, Version version,
@@ -566,9 +572,12 @@ ACTOR static Future<Void> _parseRangeFileToMutationsOnLoader(
 	return Void();
 }
 
-// Parse data blocks in a log file into a vector of <string, string> pairs. Each pair.second contains the mutations at a
-// version encoded in pair.first Step 1: decodeLogFileBlock into <string, string> pairs Step 2: Concatenate the
-// pair.second of pairs with the same pair.first.
+// Parse data blocks in a log file into a vector of <string, string> pairs.
+// Each pair.second contains the mutations at a version encoded in pair.first;
+// Step 1: decodeLogFileBlock into <string, string> pairs;
+// Step 2: Concatenate the second of pairs with the same pair.first.
+// pProcessedFileOffset: ensure each data block is processed in order exactly once;
+// pMutationMap: concatenated mutation list string at the mutation's commit version
 ACTOR static Future<Void> _parseLogFileToMutationsOnLoader(NotifiedVersion* pProcessedFileOffset,
                                                            SerializedMutationListMap* pMutationMap,
                                                            SerializedMutationPartMap* pMutationPartMap,
