@@ -259,6 +259,28 @@ inline void load( Archive& ar, std::map<K, V>& value ) {
 	ASSERT( ar.protocolVersion().isValid() );
 }
 
+#include "parallel_hashmap/phmap.h"
+template <class Archive, class K, class V>
+inline void save( Archive& ar, const phmap::parallel_flat_hash_map<K, V>& value ) {
+	ar << (int)value.size();
+	for (const auto &it : value) {
+		ar << it.first << it.second;
+	}
+	ASSERT( ar.protocolVersion().isValid() );
+}
+template <class Archive, class K, class V>
+inline void load( Archive& ar, phmap::parallel_flat_hash_map<K, V>& value ) {
+	int s;
+	ar >> s;
+	value.clear();
+	for (int i = 0; i < s; ++i) {
+		std::pair<K, V> p;
+		ar >> p.first >> p.second;
+		value.emplace(p);
+	}
+	ASSERT( ar.protocolVersion().isValid() );
+}
+
 #pragma intrinsic (memcpy)
 
 #if VALGRIND

@@ -745,7 +745,8 @@ void destroyConflictSet(ConflictSet* cs) {
 	delete cs;
 }
 
-ConflictBatch::ConflictBatch(ConflictSet* cs, std::map<int, VectorRef<int>>* conflictingKeyRangeMap,
+ConflictBatch::ConflictBatch(ConflictSet* cs,
+                             phmap::parallel_flat_hash_map<int, VectorRef<int>>* conflictingKeyRangeMap,
                              Arena* resolveBatchReplyArena)
   : cs(cs), transactionCount(0), conflictingKeyRangeMap(conflictingKeyRangeMap),
     resolveBatchReplyArena(resolveBatchReplyArena) {}

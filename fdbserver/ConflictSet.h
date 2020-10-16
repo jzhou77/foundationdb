@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "fdbclient/CommitTransaction.h"
+#include "parallel_hashmap/phmap.h"
 
 struct ConflictSet;
 ConflictSet* newConflictSet();
@@ -33,7 +34,7 @@ void clearConflictSet(ConflictSet*, Version);
 void destroyConflictSet(ConflictSet*);
 
 struct ConflictBatch {
-	explicit ConflictBatch(ConflictSet*, std::map<int, VectorRef<int>>* conflictingKeyRangeMap = nullptr,
+	explicit ConflictBatch(ConflictSet*, phmap::parallel_flat_hash_map<int, VectorRef<int>>* conflictingKeyRangeMap = nullptr,
 	                       Arena* resolveBatchReplyArena = nullptr);
 	~ConflictBatch();
 
@@ -57,7 +58,7 @@ private:
 	std::vector<struct ReadConflictRange> combinedReadConflictRanges;
 	bool* transactionConflictStatus;
 	// Stores the map: a transaction -> conflicted transactions' indices
-	std::map<int, VectorRef<int>>* conflictingKeyRangeMap;
+	phmap::parallel_flat_hash_map<int, VectorRef<int>>* conflictingKeyRangeMap;
 	Arena* resolveBatchReplyArena;
 
 	void checkIntraBatchConflicts();
