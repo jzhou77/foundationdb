@@ -29,6 +29,7 @@
 #include "fdbrpc/fdbrpc.h"
 #include "fdbclient/FDBTypes.h"
 #include "fdbclient/CommitTransaction.h"
+#include "parallel_hashmap/phmap.h"
 
 struct ResolverInterface {
 	constexpr static FileIdentifier file_identifier = 1755944;
@@ -83,7 +84,7 @@ struct ResolveTransactionBatchReply {
 	VectorRef<uint8_t> committed;
 	Optional<UID> debugID;
 	VectorRef<VectorRef<StateTransactionRef>> stateMutations;  // [version][transaction#] -> (committed, [mutation#])
-	std::map<int, VectorRef<int>>
+	phmap::parallel_flat_hash_map<int, VectorRef<int>>
 	    conflictingKeyRangeMap; // transaction index -> conflicting read_conflict_range ids given by the resolver
 
 	template <class Archive>
