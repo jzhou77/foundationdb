@@ -685,7 +685,15 @@ namespace fileBackup {
     bool filter_chunk_value(const StringRef& value, const std::vector<KeyRange>& filters) {
 	    StringRefReader reader(value, restore_corrupted_data());
 
-	    reader.consume<uint64_t>(); // Consume the includeVersion
+	    uint64_t protocolVersion = reader.consume<uint64_t>(); // Consume the includeVersion
+	    if (protocolVersion <= 0x0FDB00A200090001) {
+		    TraceEvent(SevError, "DecodeBackupLogValue")
+		        .detail("IncompatibleProtocolVersion", protocolVersion)
+		        .detail("ValueSize", value.size())
+		        .detail("Value", value);
+		    throw incompatible_protocol_version();
+	    }
+
 	    uint32_t val_length = reader.consume<uint32_t>();
 	    if (val_length != value.size() - sizeof(uint64_t) - sizeof(uint32_t)) {
 		    TraceEvent(SevError, "ValueError")
