@@ -660,16 +660,174 @@ namespace fileBackup {
 		int64_t blockEnd;
 	};
 
-	ACTOR Future<Standalone<VectorRef<KeyValueRef>>> decodeLogFileBlock(Reference<IAsyncFile> file, int64_t offset, int len) {
-		state Standalone<StringRef> buf = makeString(len);
+    std::pair<Version, int32_t> decode_key(const StringRef& key) {
+	    ASSERT(key.size() == sizeof(uint8_t) + sizeof(Version) + sizeof(int32_t));
+
+	    uint8_t hash;
+	    Version version;
+	    int32_t part;
+	    BinaryReader rd(key, Unversioned());
+	    rd >> hash >> version >> part;
+	    version = bigEndian64(version);
+	    part = bigEndian32(part);
+
+	    int32_t v = version / CLIENT_KNOBS->LOG_RANGE_BLOCK_SIZE;
+	    ASSERT(((uint8_t)hashlittle(&v, sizeof(v), 0)) == hash);
+
+	    return std::make_pair(version, part);
+    }
+
+    // Decodes an encoded list of mutations in the format of:
+    //   [includeVersion:uint64_t][val_length:uint32_t][mutation_1][mutation_2]...[mutation_k],
+    // where a mutation is encoded as:
+    //   [type:uint32_t][keyLength:uint32_t][valueLength:uint32_t][key][value]
+    // Return if any key is within the filter
+    bool filter_chunk_value(const StringRef& value, const std::vector<KeyRange>& filters) {
+	    StringRefReader reader(value, restore_corrupted_data());
+
+	    reader.consume<uint64_t>(); // Consume the includeVersion
+	    uint32_t val_length = reader.consume<uint32_t>();
+	    if (val_length != value.size() - sizeof(uint64_t) - sizeof(uint32_t)) {
+		    TraceEvent(SevError, "ValueError")
+		        .detail("ValueLen", val_length)
+		        .detail("ValueSize", value.size())
+		        .detail("Value", printable(value));
+	    }
+
+	    while (1) {
+		    if (reader.eof()) break;
+
+		    // Deserialization of a MutationRef, which was packed by MutationListRef::push_back_deep()
+		    uint32_t type, p1len, p2len;
+		    type = reader.consume<uint32_t>();
+		    p1len = reader.consume<uint32_t>();
+		    p2len = reader.consume<uint32_t>();
+
+		    const uint8_t* key = reader.consume(p1len);
+		    const uint8_t* val = reader.consume(p2len);
+		    (void)val;
+
+		    for (const auto& filter : filters) {
+			    if (filter.contains(KeyRef(key, p1len))) return true;
+		    }
+	    }
+	    return false;
+    }
+
+    // Returns a buffer which stitches first "idx" values into one.
+    // "len" MUST equal the summation of these values.
+    Standalone<StringRef> combineValues(
+        const std::vector<std::tuple<StringRef, Version, int32_t, StringRef>>& keyValues, const int idx,
+        const int len) {
+	    ASSERT(idx <= keyValues.size() && idx > 1);
+
+	    Standalone<StringRef> buf = makeString(len);
+	    int n = 0;
+	    for (int i = 0; i < idx; i++) {
+		    const auto& value = std::get<3>(keyValues[i]);
+		    memcpy(mutateString(buf) + n, value.begin(), value.size());
+		    n += value.size();
+	    }
+
+	    ASSERT(n == len);
+	    return buf;
+    }
+
+    // Returns true if value contains complete data.
+    bool isValueComplete(StringRef value) {
+	    StringRefReader reader(value, restore_corrupted_data());
+
+	    reader.consume<uint64_t>(); // Consume the includeVersion
+	    uint32_t val_length = reader.consume<uint32_t>();
+	    return val_length == value.size() - sizeof(uint64_t) - sizeof(uint32_t);
+    }
+
+    Standalone<VectorRef<KeyValueRef>> filter_chunk_by_ranges(
+        std::vector<std::tuple<StringRef, Version, int32_t, StringRef>>& keyValues,
+        const std::vector<KeyRange>& filterRanges, Arena arena) {
+	    Standalone<VectorRef<KeyValueRef>> results({}, arena);
+
+	    while (!keyValues.empty()) {
+		    auto& tuple = keyValues[0];
+		    if (keyValues.size() == 1) {
+			    results.push_back(results.arena(), KeyValueRef(std::get<0>(tuple), std::get<3>(tuple)));
+			    break;
+		    }
+
+		    // first pass: any chunck number > 0 is ignored
+		    while (!keyValues.empty() && std::get<2>(keyValues[0]) > 0) {
+			    auto& tuple = keyValues[0];
+			    results.push_back(results.arena(), KeyValueRef(std::get<0>(tuple), std::get<3>(tuple)));
+			    keyValues.erase(keyValues.begin(), keyValues.begin() + 1);
+		    }
+
+		    // try to find a continuous range of chunks of the same version
+		    if (keyValues.empty()) break;
+
+		    tuple = keyValues[0];
+		    int idx = 1;
+		    int bufSize = std::get<3>(tuple).size();
+		    for (int lastPart = 0; idx < keyValues.size(); idx++, lastPart++) {
+			    if (idx == keyValues.size()) break;
+
+			    auto next_tuple = keyValues[idx];
+			    if (std::get<1>(tuple) != std::get<1>(next_tuple)) {
+				    break; // different version
+			    }
+
+			    if (lastPart + 1 != std::get<2>(next_tuple)) {
+				    TraceEvent("DecodeError").detail("Part1", lastPart).detail("Part2", std::get<2>(next_tuple));
+				    throw restore_corrupted_data();
+			    }
+			    bufSize += std::get<3>(next_tuple).size();
+		    }
+
+		    // ignore the last version
+		    if (idx == keyValues.size()) {
+			    while (!keyValues.empty()) {
+				    results.push_back(results.arena(),
+				                      KeyValueRef(std::get<0>(keyValues[0]), std::get<3>(keyValues[0])));
+				    keyValues.erase(keyValues.begin(), keyValues.begin() + 1);
+			    }
+			    break;
+		    }
+
+		    StringRef value = std::get<3>(tuple);
+		    Arena tmp = arena;
+		    if (idx > 1) {
+			    Standalone<StringRef> buf = combineValues(keyValues, idx, bufSize);
+			    value = buf;
+			    tmp = buf.arena();
+		    }
+		    if (isValueComplete(value)) {
+			    bool found = filter_chunk_value(value, filterRanges);
+			    while (found && idx > 0) {
+				    results.push_back(results.arena(), KeyValueRef(std::get<0>(tuple), std::get<3>(tuple)));
+				    keyValues.erase(keyValues.begin(), keyValues.begin() + 1);
+				    idx--;
+			    }
+		    }
+	    }
+	    return results;
+    }
+
+    // Each block has chuncks numbered like: [4, 0,1,2,3, 0, 0, 0, 0,1,2,3, 0,1,2]
+    // We can filter it to [4, filtered, 0,1,2] chunks.
+    // The begining and ending can't be filtered, because they are not complete block.
+    ACTOR Future<Standalone<VectorRef<KeyValueRef>>> decodeLogFileBlock(Reference<IAsyncFile> file, int64_t offset,
+                                                                        int len, std::vector<KeyRange> filterRanges) {
+	    state Standalone<StringRef> buf = makeString(len);
 		int rLen = wait(file->read(mutateString(buf), len, offset));
 		if(rLen != len)
 			throw restore_bad_read();
 
-		Standalone<VectorRef<KeyValueRef>> results({}, buf.arena());
-		state StringRefReader reader(buf, restore_corrupted_data());
+	    // Standalone<VectorRef<KeyValueRef>> results({}, buf.arena());
+	    state StringRefReader reader(buf, restore_corrupted_data());
 
-		try {
+	    // A (keyref, version, part_number, valueref) tuple
+	    std::vector<std::tuple<StringRef, Version, int32_t, StringRef>> keyValues;
+
+	    try {
 			// Read header, currently only decoding version BACKUP_AGENT_MLOG_VERSION
 			if(reader.consume<int32_t>() != BACKUP_AGENT_MLOG_VERSION)
 				throw restore_unsupported_file_version();
@@ -683,20 +841,34 @@ namespace fileBackup {
 				// Read key and value.  If anything throws then there is a problem.
 				uint32_t kLen = reader.consumeNetworkUInt32();
 				const uint8_t *k = reader.consume(kLen);
-				uint32_t vLen = reader.consumeNetworkUInt32();
+			    std::pair<Version, int32_t> version_part = decode_key(StringRef(k, kLen));
+			    uint32_t vLen = reader.consumeNetworkUInt32();
 				const uint8_t *v = reader.consume(vLen);
 
-				results.push_back(results.arena(), KeyValueRef(KeyRef(k, kLen), ValueRef(v, vLen)));
-			}
+			    keyValues.emplace_back(StringRef(k, kLen), version_part.first, version_part.second, StringRef(v, vLen));
+
+			    // this is the chunk KV pair that we'll filter
+			    // results.push_back(results.arena(), KeyValueRef(KeyRef(k, kLen), ValueRef(v, vLen)));
+		    }
 
 			// Make sure any remaining bytes in the block are 0xFF
 			for(auto b : reader.remainder())
 				if(b != 0xFF)
 					throw restore_corrupted_data_padding();
 
-			return results;
+		    // The (version, part) in a block can be out of order, i.e., (3, 0)
+		    // can be followed by (4, 0), and then (3, 1). So we need to sort them
+		    // first by version, and then by part number.
+		    std::sort(keyValues.begin(), keyValues.end(),
+		              [](const std::tuple<StringRef, Version, int32_t, StringRef>& a,
+		                 const std::tuple<StringRef, Version, int32_t, StringRef>& b) {
+			              return std::get<1>(a) == std::get<1>(b) ? std::get<2>(a) < std::get<2>(b)
+			                                                      : std::get<1>(a) < std::get<1>(b);
+		              });
 
-		} catch(Error &e) {
+		    return filter_chunk_by_ranges(keyValues, filterRanges, buf.arena());
+
+	    } catch(Error &e) {
 			TraceEvent(SevWarn, "FileRestoreCorruptLogFileBlock")
 				.error(e)
 				.detail("Filename", file->getFilename())
@@ -706,9 +878,9 @@ namespace fileBackup {
 				.detail("ErrorAbsoluteOffset", reader.rptr - buf.begin() + offset);
 			throw;
 		}
-	}
+    }
 
-	ACTOR Future<Void> checkTaskVersion(Database cx, Reference<Task> task, StringRef name, uint32_t version) {
+    ACTOR Future<Void> checkTaskVersion(Database cx, Reference<Task> task, StringRef name, uint32_t version) {
 		uint32_t taskVersion = task->getVersion();
 		if (taskVersion > version) {
 			state Error err = task_invalid_version();
@@ -2887,10 +3059,12 @@ namespace fileBackup {
 			}
 
 			state Key mutationLogPrefix = restore.mutationLogPrefix();
-			state Reference<IAsyncFile> inFile = wait(bc->readFile(logFile.fileName));
-			state Standalone<VectorRef<KeyValueRef>> data = wait(decodeLogFileBlock(inFile, readOffset, readLen));
+		    state std::vector<KeyRange> filterRanges = wait(restore.getRestoreRangesOrDefault(tr));
+		    state Reference<IAsyncFile> inFile = wait(bc->readFile(logFile.fileName));
+		    state Standalone<VectorRef<KeyValueRef>> data =
+		        wait(decodeLogFileBlock(inFile, readOffset, readLen, filterRanges));
 
-			state int start = 0;
+		    state int start = 0;
 			state int end = data.size();
 			state int dataSizeLimit = BUGGIFY ? deterministicRandom()->randomInt(256 * 1024, 10e6) : CLIENT_KNOBS->RESTORE_WRITE_TX_SIZE;
 
