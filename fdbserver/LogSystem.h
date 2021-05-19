@@ -52,6 +52,7 @@ struct ConnectionResetInfo : public ReferenceCounted<ConnectionResetInfo> {
 class LogSet : NonCopyable, public ReferenceCounted<LogSet> {
 public:
 	std::vector<Reference<AsyncVar<OptionalInterface<TLogInterface>>>> logServers;
+	std::vector<Reference<AsyncVar<OptionalInterface<ptxn::TLogInterface_PassivelyPull>>>> logServers7;
 	std::vector<Reference<AsyncVar<OptionalInterface<TLogInterface>>>> logRouters;
 	std::vector<Reference<AsyncVar<OptionalInterface<BackupInterface>>>> backupWorkers;
 	std::vector<Reference<ConnectionResetInfo>> connectionResetTrackers;

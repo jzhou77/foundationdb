@@ -18,6 +18,7 @@
  * limitations under the License.
  */
 
+#include "fdbserver/WorkerInterface.actor.h"
 #include "flow/ActorCollection.h"
 #include "fdbserver/LogSystem.h"
 #include "fdbserver/ServerDBInfo.h"
@@ -29,6 +30,7 @@
 #include "fdbrpc/ReplicationUtils.h"
 #include "fdbserver/RecoveryState.h"
 #include "fdbserver/LogProtocolMessage.h"
+#include "flow/IRandom.h"
 #include "flow/actorcompiler.h" // This must be the last #include.
 
 ACTOR Future<Version> minVersionWhenReady(Future<Void> f, std::vector<Future<TLogCommitReply>> replies) {
@@ -2832,12 +2834,14 @@ struct TagPartitionedLogSystem : ILogSystem, ReferenceCounted<TagPartitionedLogS
 		state LogSystemConfig oldLogSystemConfig = oldLogSystem->getLogSystemConfig();
 
 		state vector<Future<TLogInterface>> initializationReplies;
-		vector<InitializeTLogRequest> reqs(recr.tLogs.size());
+		state vector<Future<ptxn::TLogInterface_PassivelyPull>> initializationReplies7;
+		state vector<InitializeTLogRequest> reqs = vector<InitializeTLogRequest>(recr.tLogs.size());
 
 		logSystem->tLogs[0]->tLogLocalities.resize(recr.tLogs.size());
 		logSystem->tLogs[0]->logServers.resize(
 		    recr.tLogs.size()); // Dummy interfaces, so that logSystem->getPushLocations() below uses the correct size
 		logSystem->tLogs[0]->updateLocalitySet(localities);
+		logSystem->tLogs[0]->logServers7.resize(recr.tLogs.size());
 
 		std::vector<int> locations;
 		for (Tag tag : localTags) {
@@ -2886,6 +2890,11 @@ struct TagPartitionedLogSystem : ILogSystem, ReferenceCounted<TagPartitionedLogS
 			req.startVersion = logSystem->tLogs[0]->startVersion;
 			req.logRouterTags = logSystem->logRouterTags;
 			req.txsTags = logSystem->txsTags;
+			auto g1 = ptxn::TLogGroup(), g2 = ptxn::TLogGroup();
+			g1.logGroupId = UID(2, 3);
+			g2.logGroupId = UID(3, 4);
+			req.tlogGroups = { g1, g2 };
+			// TODO: Add TLogGroup here
 		}
 
 		initializationReplies.reserve(recr.tLogs.size());
@@ -2980,9 +2989,20 @@ struct TagPartitionedLogSystem : ILogSystem, ReferenceCounted<TagPartitionedLogS
 
 		wait(waitForAll(initializationReplies) || oldRouterRecruitment);
 
+		state int i = 0;
+		for (i = 0; i < reqs.size(); i++) {
+			// std::cout << "Waitin ffor: " << reqs[i].ptxnReply.isSet() << std::endl;
+			ASSERT(reqs[i].isPrimary);
+			ptxn::TLogInterface_PassivelyPull _ = wait(reqs[i].ptxnReply.getFuture());
+			// std::cout << "Recruitment Done: " << reqs[i].ptxnReply.isSet() << std::endl;
+		}
+
 		for (int i = 0; i < initializationReplies.size(); i++) {
 			logSystem->tLogs[0]->logServers[i] = makeReference<AsyncVar<OptionalInterface<TLogInterface>>>(
 			    OptionalInterface<TLogInterface>(initializationReplies[i].get()));
+			logSystem->tLogs[0]->logServers7[i] =
+			    makeReference<AsyncVar<OptionalInterface<ptxn::TLogInterface_PassivelyPull>>>(
+			        OptionalInterface<ptxn::TLogInterface_PassivelyPull>(reqs[i].ptxnReply.getFuture().get()));
 			logSystem->tLogs[0]->tLogLocalities[i] = recr.tLogs[i].locality;
 		}
 		filterLocalityDataForPolicy(logSystem->tLogs[0]->tLogPolicy, &logSystem->tLogs[0]->tLogLocalities);
