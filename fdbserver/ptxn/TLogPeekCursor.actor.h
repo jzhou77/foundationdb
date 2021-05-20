@@ -300,7 +300,13 @@ public:
 	std::unique_ptr<PeekCursorBase> removeCursor(const StorageTeamID&);
 
 	// Get all TeamIDs for currently active cursors
-	std::vector<StorageTeamID> getCursorTeamIDs();
+	std::vector<StorageTeamID> getCursorStorageTeamIDs();
+
+	// Get the storage team ID under the current iterator
+	StorageTeamID getStorageTeamIDForIterator(const PeekCursorBase::iterator& iterator) const;
+
+	// Get the storage team ID for the mutation the cursor currently at
+	StorageTeamID getCurrentStorageTeamID() const;
 
 protected:
 	virtual CursorContainer::iterator addCursorImpl(std::unique_ptr<PeekCursorBase>&&) override;

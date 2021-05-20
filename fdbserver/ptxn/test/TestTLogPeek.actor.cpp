@@ -57,7 +57,7 @@ ACTOR Future<Void> peekAndCheck(std::shared_ptr<FakeTLogContext> pContext) {
 	state TLogPeekRequest request(debugID, beginVersion, endVersion, storageTeamID);
 	print::print(request);
 
-	state TLogPeekReply reply = wait(pContext->pTLogInterface->peek.getReply(request));
+	state TLogPeekReply reply = wait(pContext->pTLogInterface->peekMessages.getReply(request));
 	print::print(reply);
 
 	// Locate the mutations in TLog storage
@@ -352,7 +352,7 @@ TEST_CASE("/fdbserver/ptxn/test/tLogPeek/cursor/MergedStorageTeamPeekCursor/remo
 	ASSERT_EQ(pCursor->getNumActiveCursors(), 2);
 	wait(ptxn::test::verifyCursorDataMatchTLogData(pContext, pCursor, { { 2, 0 }, { 2, 1 }, { 0, 2 }, { 2, 2 } }));
 
-	std::vector<ptxn::StorageTeamID> activeTeamIDs(pCursor->getCursorTeamIDs());
+	std::vector<ptxn::StorageTeamID> activeTeamIDs(pCursor->getCursorStorageTeamIDs());
 	ASSERT((activeTeamIDs[0] == storageTeamIDs[0] && activeTeamIDs[1] == storageTeamIDs[2]) ||
 	       (activeTeamIDs[0] == storageTeamIDs[2] && activeTeamIDs[1] == storageTeamIDs[0]));
 

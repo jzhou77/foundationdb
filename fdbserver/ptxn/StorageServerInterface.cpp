@@ -22,16 +22,25 @@
 
 namespace ptxn {
 
+void StorageServerInterfaceBase::initEndpoints() {
+	initEndpointsImpl();
+}
+
 void StorageServerInterfaceBase::initEndpointsImpl(std::vector<ReceiverPriorityPair>&& receivers) {
-	FlowTransport::transport().addEndpoints(receivers);
+	// No additional receivers added in this layer
+	if (receivers.size() != 0) {
+		FlowTransport::transport().addEndpoints(receivers);
+	}
 }
 
-void StorageServerInterface_ActivelyPull::initEndpoints() {
-	initEndpointsImpl({});
+void StorageServerInterface_ActivelyPull::initEndpointsImpl(std::vector<ReceiverPriorityPair>&& receivers) {
+	// No additional receivers added in this layer
+	StorageServerInterfaceBase::initEndpointsImpl(std::move(receivers));
 }
 
-void StorageServerInterface_PassivelyReceive::initEndpoints() {
-	initEndpointsImpl({ pushRequests.getReceiver() });
+void StorageServerInterface_PassivelyReceive::initEndpointsImpl(std::vector<ReceiverPriorityPair>&& receivers) {
+	receivers.push_back(pushRequests.getReceiver());
+	StorageServerInterfaceBase::initEndpointsImpl(std::move(receivers));
 }
 
 std::shared_ptr<StorageServerInterfaceBase> getNewStorageServerInterface(const MessageTransferModel model) {

@@ -16,4 +16,4 @@ startDelay = 0
     numResolvers = 10
     # 0 stands for TLog --push--> StorageServer
     # 1 stands for StorageServer --pull--> TLog
-    messageTransferModel = 0
+    messageTransferModel = 1

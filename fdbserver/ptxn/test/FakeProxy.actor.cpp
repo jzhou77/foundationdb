@@ -97,6 +97,7 @@ ACTOR Future<Void> fakeProxy(std::shared_ptr<FakeProxyContext> pFakeProxyContext
 		}
 	}
 
+	/* FIXME Comment out for demo purpuse
 	// Wait for all commits being completed persisted/timeout
 	state int numChecks = 0;
 	loop {
@@ -107,8 +108,8 @@ ACTOR Future<Void> fakeProxy(std::shared_ptr<FakeProxyContext> pFakeProxyContext
 			throw internal_error_msg("Timeout waiting persistence");
 		}
 		wait(delay(CHECK_PERSIST_INTERVAL));
-	}
-
+	} */
+	wait(delay(5.0));
 	return Void();
 }
 

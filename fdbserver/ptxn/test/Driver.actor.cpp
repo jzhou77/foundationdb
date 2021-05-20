@@ -46,7 +46,9 @@
 
 namespace ptxn::test {
 
-CommitRecord::CommitRecord(const Version& version_, const StorageTeamID& storageTeamID_, std::vector<MutationRef>&& mutations_)
+CommitRecord::CommitRecord(const Version& version_,
+                           const StorageTeamID& storageTeamID_,
+                           std::vector<MutationRef>&& mutations_)
   : version(version_), storageTeamID(storageTeamID_), mutations(std::move(mutations_)) {}
 
 bool CommitValidationRecord::validated() const {
@@ -58,7 +60,7 @@ TestDriverOptions::TestDriverOptions(const UnitTestParameters& params)
     numStorageTeams(params.getInt("numStorageTeams").orDefault(DEFAULT_NUM_TEAMS)),
     numProxies(params.getInt("numProxies").orDefault(DEFAULT_NUM_PROXIES)),
     numTLogs(params.getInt("numTLogs").orDefault(DEFAULT_NUM_TLOGS)),
-	numTLogGroups(params.getInt("numTLogGroups").orDefault(DEFAULT_NUM_TLOG_GROUPS)),
+    numTLogGroups(params.getInt("numTLogGroups").orDefault(DEFAULT_NUM_TLOG_GROUPS)),
     numStorageServers(params.getInt("numStorageServers").orDefault(DEFAULT_NUM_STORAGE_SERVERS)),
     numResolvers(params.getInt("numResolvers").orDefault(DEFAULT_NUM_RESOLVERS)),
     transferModel(static_cast<MessageTransferModel>(
@@ -140,7 +142,8 @@ std::shared_ptr<TLogInterfaceBase> TestDriverContext::getTLogInterface(const Sto
 	return storageTeamIDTLogInterfaceMapper.at(storageTeamID);
 }
 
-std::shared_ptr<StorageServerInterfaceBase> TestDriverContext::getStorageServerInterface(const StorageTeamID& storageTeamID) {
+std::shared_ptr<StorageServerInterfaceBase> TestDriverContext::getStorageServerInterface(
+    const StorageTeamID& storageTeamID) {
 	return storageTeamIDStorageServerInterfaceMapper.at(storageTeamID);
 }
 
@@ -180,8 +183,10 @@ void startFakeTLog(std::vector<Future<Void>>& actors, std::shared_ptr<TestDriver
 
 void startFakeStorageServer(std::vector<Future<Void>>& actors, std::shared_ptr<TestDriverContext> pTestDriverContext) {
 	for (int i = 0; i < pTestDriverContext->numStorageServers; ++i) {
-		std::shared_ptr<FakeStorageServerContext> pFakeStorageServerContext(
-		    new FakeStorageServerContext{ pTestDriverContext, pTestDriverContext->storageServerInterfaces[i] });
+		std::shared_ptr<FakeStorageServerContext> pFakeStorageServerContext(new FakeStorageServerContext);
+		pFakeStorageServerContext->pTestDriverContext = pTestDriverContext;
+		pFakeStorageServerContext->pStorageServerInterface = pTestDriverContext->storageServerInterfaces[i];
+
 		actors.emplace_back(
 		    getFakeStorageServerActor(pTestDriverContext->messageTransferModel, pFakeStorageServerContext));
 	}
@@ -202,7 +207,8 @@ void verifyMutationsInRecord(std::vector<CommitRecord>& records,
                              const std::vector<MutationRef>& mutations,
                              std::function<void(CommitValidationRecord&)> validateUpdater) {
 	for (auto& record : records) {
-		if (record.version == version && record.storageTeamID == storageTeamID && record.mutations.size() == mutations.size()) {
+		if (record.version == version && record.storageTeamID == storageTeamID &&
+		    record.mutations.size() == mutations.size()) {
 			bool isSame = true;
 			for (size_t i = 0; i < mutations.size(); ++i) {
 				if (!(record.mutations[i].type == mutations[i].type &&
@@ -236,9 +242,7 @@ TEST_CASE("/fdbserver/ptxn/test/driver") {
 	TestDriverOptions options(params);
 
 	std::shared_ptr<TestDriverContext> context = initTestDriverContext(options);
-	std::cout << 1 << std::endl;
 	std::vector<Future<Void>> actors;
-	std::cout << 2 << std::endl;
 
 	startFakeProxy(actors, context);
 	startFakeTLog(actors, context);

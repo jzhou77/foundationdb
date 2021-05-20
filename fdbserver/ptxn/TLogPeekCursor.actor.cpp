@@ -97,7 +97,7 @@ ACTOR Future<bool> peekRemote(PeekRemoteContext peekRemoteContext) {
 	request.storageTeamID = peekRemoteContext.storageTeamID;
 
 	try {
-		state TLogPeekReply reply = wait(pTLogInterface->peek.getReply(request));
+		state TLogPeekReply reply = wait(pTLogInterface->peekMessages.getReply(request));
 
 		peekRemoteContext.pDeserializer->reset(reply.arena, reply.data);
 		*peekRemoteContext.pLastVersion = peekRemoteContext.pDeserializer->getLastVersion();
@@ -301,8 +301,8 @@ bool StorageTeamPeekCursor::hasRemainingImpl() const {
 }
 
 MergedPeekCursor::IndexedCursor::IndexedCursor(const Version& version_,
-                             const Subsequence& subsequence_,
-                             MergedPeekCursor::CursorContainer::iterator pCursorPtr_)
+                                               const Subsequence& subsequence_,
+                                               MergedPeekCursor::CursorContainer::iterator pCursorPtr_)
   : version(version_), subsequence(subsequence_), pCursorPtr(pCursorPtr_) {}
 
 MergedPeekCursor::MergedPeekCursor() : PeekCursorBase() {}
@@ -419,13 +419,27 @@ Future<bool> MergedStorageTeamPeekCursor::remoteMoreAvailableImpl() {
 	return peekRemoteForMergedStorageTeamCursor({ &cursorPtrs, &cursorHeap, &storageTeamIDCursorMapper });
 }
 
-std::vector<StorageTeamID> MergedStorageTeamPeekCursor::getCursorTeamIDs() {
+std::vector<StorageTeamID> MergedStorageTeamPeekCursor::getCursorStorageTeamIDs() {
 	std::vector<StorageTeamID> result;
 	result.reserve(storageTeamIDCursorMapper.size());
 	for (const auto& [storageTeamID, _] : storageTeamIDCursorMapper) {
 		result.push_back(storageTeamID);
 	}
 	return result;
+}
+
+StorageTeamID MergedStorageTeamPeekCursor::getStorageTeamIDForIterator(const PeekCursorBase::iterator& iterator) const {
+	ASSERT(iterator != this->end());
+
+	// The iterator is always pointing to the mutations from the top cursor in the cursor heap, so it is not used
+	return getCurrentStorageTeamID();
+}
+
+StorageTeamID MergedStorageTeamPeekCursor::getCurrentStorageTeamID() const {
+	const auto& indexedCursor = cursorHeap.top();
+	StorageTeamPeekCursor* pCursor = dynamic_cast<StorageTeamPeekCursor*>((*indexedCursor.pCursorPtr).get());
+	ASSERT(pCursor != nullptr);
+	return pCursor->getStorageTeamID();
 }
 
 // Moves the cursor so it locates to the given version/subsequence. If the version/subsequence does not exist, moves the

@@ -63,7 +63,7 @@ struct FakeTLogContext {
 };
 
 // Fill the FakeTLog server with random mutations
-// If numStorageTeams is 0, the exiting storageTeamIDs will be used.
+// If numStorageTeams is 0, the existing storageTeamIDs will be used.
 void fillTLogWithRandomMutations(std::shared_ptr<FakeTLogContext> pContext,
                                  const Version& initialVersion,
                                  const int numMutations,

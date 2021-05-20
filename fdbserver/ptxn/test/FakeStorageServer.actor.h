@@ -24,13 +24,16 @@
 #elif !defined(FDBSERVER_PTXN_TEST_FAKESTORAGESERVER_ACTOR_H)
 #define FDBSERVER_PTXN_TEST_FAKESTORAGESERVER_ACTOR_H
 
+#include <functional>
 #include <memory>
-#include <unordered_map>
+#include <set>
+#include <string>
 
 #include "fdbclient/FDBTypes.h"
+#include "fdbserver/IKeyValueStore.h"
 #include "fdbserver/ptxn/test/Driver.h"
 #include "fdbserver/ptxn/StorageServerInterface.h"
-#include "fdbserver/ptxn/StorageServerInterface.h"
+#include "fdbserver/ptxn/TLogPeekCursor.actor.h"
 #include "flow/flow.h"
 
 #include "flow/actorcompiler.h" // has to be the last file included
@@ -40,8 +43,23 @@
 namespace ptxn::test {
 
 struct FakeStorageServerContext {
+	const UID id;
+
 	std::shared_ptr<TestDriverContext> pTestDriverContext;
 	std::shared_ptr<StorageServerInterfaceBase> pStorageServerInterface;
+
+	std::shared_ptr<MergedStorageTeamPeekCursor> pCursor;
+
+	Version lastVersion = 0;
+
+	Arena persistenceArena;
+	std::unique_ptr<IKeyValueStore, std::function<void(IKeyValueStore*)>> pStorageEngine;
+    std::set<std::string> keys;
+
+	FakeStorageServerContext();
+	// Initialize the peek cursor. This cannot be initialized in the constructor since we only know which storage teams
+	// we are involved later.
+	void initializePeekCursor();
 };
 
 ACTOR Future<Void> fakeStorageServer_ActivelyPull(std::shared_ptr<FakeStorageServerContext> pFakeStorageServerContext);
