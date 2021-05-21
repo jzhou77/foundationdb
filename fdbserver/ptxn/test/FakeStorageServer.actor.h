@@ -35,6 +35,7 @@
 #include "fdbserver/ptxn/StorageServerInterface.h"
 #include "fdbserver/ptxn/TLogPeekCursor.actor.h"
 #include "flow/flow.h"
+#include "flow/genericactors.actor.h"
 
 #include "flow/actorcompiler.h" // has to be the last file included
 
@@ -48,13 +49,12 @@ struct FakeStorageServerContext {
 	std::shared_ptr<TestDriverContext> pTestDriverContext;
 	std::shared_ptr<StorageServerInterfaceBase> pStorageServerInterface;
 
-	std::shared_ptr<MergedStorageTeamPeekCursor> pCursor;
+	std::vector<std::unique_ptr<StorageTeamPeekCursor>> cursorPtrs;
 
-	Version lastVersion = 0;
+    Version lastVersion;
 
 	Arena persistenceArena;
 	std::unique_ptr<IKeyValueStore, std::function<void(IKeyValueStore*)>> pStorageEngine;
-    std::set<std::string> keys;
 
 	FakeStorageServerContext();
 	// Initialize the peek cursor. This cannot be initialized in the constructor since we only know which storage teams

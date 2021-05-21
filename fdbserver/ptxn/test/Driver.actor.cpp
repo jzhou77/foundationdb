@@ -236,6 +236,8 @@ void verifyMutationsInRecord(std::vector<CommitRecord>& records,
 
 } // namespace ptxn::test
 
+extern AsyncTrigger cycleCompleted;
+
 TEST_CASE("/fdbserver/ptxn/test/driver") {
 	using namespace ptxn::test;
 
@@ -249,6 +251,8 @@ TEST_CASE("/fdbserver/ptxn/test/driver") {
 	startFakeStorageServer(actors, context);
 
 	wait(quorum(actors, 1));
+	cycleCompleted.trigger();
+	wait(delay(1.0));
 
 	return Void();
 }

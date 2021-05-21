@@ -32,6 +32,7 @@
 #include "flow/flow.h"
 
 #include "flow/actorcompiler.h"
+extern AsyncTrigger cycleCompleted;
 
 namespace ptxn::test {
 
@@ -109,7 +110,7 @@ ACTOR Future<Void> fakeProxy(std::shared_ptr<FakeProxyContext> pFakeProxyContext
 		}
 		wait(delay(CHECK_PERSIST_INTERVAL));
 	} */
-	wait(delay(5.0));
+
 	return Void();
 }
 
