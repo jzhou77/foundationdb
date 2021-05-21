@@ -34,7 +34,7 @@
 
 #include "flow/actorcompiler.h" // has to be last include
 
-extern AsyncTrigger cycleCompleted;
+extern AsyncTrigger cycleCompleted, loggingCompleted;
 
 namespace ptxn::test {
 
@@ -57,6 +57,7 @@ void FakeStorageServerContext::initializePeekCursor() {
 	for (auto& tLogInterface : tLogInterfaces) {
 		TLogInterfaceBase *interf = new TLogInterface_PassivelyPull(tLogInterface);
 		cursorPtrs.emplace_back(std::make_unique<StorageTeamPeekCursor>(0, demoTeam, interf));
+		break;
 	}
 /*
 	for (auto& [storageTeamID, tLogInterface] : pTestDriverContext->storageTeamIDTLogInterfaceMapper) {
@@ -90,7 +91,7 @@ ACTOR Future<Void> writeKeyValuesToFile(std::shared_ptr<FakeStorageServerContext
 	RangeResult rangeResult = wait(pContext->pStorageEngine->readRange(range));
 	std::cout << "Number of key-value pairs: " << rangeResult.size() << std::endl;
 	for (decltype(rangeResult.begin()) iter = rangeResult.begin(); iter != rangeResult.end(); ++iter) {
-		ofs << std::setw(40) << iter->key.toHexString() << std::setw(40) << iter->value.toHexString() << std::endl;
+		ofs << std::setw(40) << printable(iter->key) << std::setw(40) << printable(iter->value) << std::endl;
 	}
 
 	std::cout << "End of dumping SS" << std::endl;
@@ -178,6 +179,7 @@ ACTOR Future<Void> fakeStorageServer_ActivelyPull(std::shared_ptr<FakeStorageSer
 			when(wait(cycleCompleted.onTrigger())) {
 				std::cout << " Cycle completed triggered " << std::endl;
 				wait(writeKeyValuesToFile(pFakeStorageServerContext));
+				loggingCompleted.trigger();
 				break;
 			}
 		}

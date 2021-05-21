@@ -1188,7 +1188,7 @@ ACTOR Future<Void> postResolution(CommitBatchContext* self) {
 			self->toCommit.addTxsTag();
 		}
 		self->toCommit.writeMessage(StringRef(m.begin(), m.size()), !firstMessage);
-		self->teamMessageBuilder.writeMessage(StringRef(m.begin(), m.size()), ptxn::txsTeam);
+		//self->teamMessageBuilder.writeMessage(StringRef(m.begin(), m.size()), ptxn::txsTeam);
 		firstMessage = false;
 	}
 
@@ -1213,9 +1213,16 @@ ACTOR Future<Void> postResolution(CommitBatchContext* self) {
 	                                                          self->debugID);
 
 	auto results = self->teamMessageBuilder.getAllSerialized();
+	if (results.empty()) {
+		results.emplace(ptxn::demoTeam, Standalone<StringRef>());
+	}
+	TraceEvent("CommitDebug", self->pProxyCommitData->dbgid)
+	    .detail("Location", "CommitProxy").detail("Results", results.size())
+	    .detail("Version", self->commitVersion)
+	    .detail("PrevVersion", self->prevVersion);
 	std::vector<Future<ptxn::TLogCommitReply>> teamReplies;
 	for (const auto& [team, data] : results) {
-		if (team != ptxn::demoTeam) continue;
+		ASSERT(team == ptxn::demoTeam);
 
 		// TODO: Find demo team's tlog
 		std::vector<ptxn::TLogInterface_PassivelyPull> tlis = ptxn::getDemoTLogInterface(ptxn::demoTeam);

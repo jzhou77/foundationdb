@@ -75,6 +75,11 @@ struct TestDriverOptions {
 	bool skipCommitValidation;
 	MessageTransferModel transferModel;
 
+	TestDriverOptions()
+	  : numCommits(DEFAULT_NUM_COMMITS), numStorageTeams(DEFAULT_NUM_TEAMS), numProxies(DEFAULT_NUM_PROXIES),
+	    numTLogs(DEFAULT_NUM_TLOGS), numTLogGroups(DEFAULT_NUM_TLOG_GROUPS),
+	    numStorageServers(DEFAULT_NUM_STORAGE_SERVERS), numResolvers(DEFAULT_NUM_RESOLVERS),
+	    skipCommitValidation(false), transferModel(DEFAULT_MESSAGE_TRANSFER_MODEL) {}
 	explicit TestDriverOptions(const UnitTestParameters&);
 };
 

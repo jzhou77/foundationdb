@@ -32,7 +32,7 @@ StringRef debugKey = LiteralStringRef("");
 StringRef debugKey2 = LiteralStringRef("\xff\xff\xff\xff");
 
 TraceEvent debugMutationEnabled(const char* context, Version version, MutationRef const& mutation) {
-	if ((mutation.type == mutation.ClearRange || mutation.type == mutation.DebugKeyRange) &&
+	if (version == 1305132 || version == 1311578 || (mutation.type == mutation.ClearRange || mutation.type == mutation.DebugKeyRange) &&
 	    ((mutation.param1 <= debugKey && mutation.param2 > debugKey) ||
 	     (mutation.param1 <= debugKey2 && mutation.param2 > debugKey2))) {
 		TraceEvent event("MutationTracking");

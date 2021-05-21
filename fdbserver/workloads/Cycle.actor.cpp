@@ -34,14 +34,15 @@
 #include <iostream>
 
 AsyncTrigger cycleCompleted;
-bool cycleStarted = false;
+AsyncTrigger loggingCompleted;
+
 
 void saveToFile(const RangeResult& rangeResult) {
 	std::ofstream ofs("Cycle-output.txt", std::ios::out);
 
 	std::cout << "Number of key-value pairs: " << rangeResult.size() << std::endl;
 	for (decltype(rangeResult.begin()) iter = rangeResult.begin(); iter != rangeResult.end(); ++iter) {
-		ofs << std::setw(40) << iter->key.toHexString() << std::setw(40) << iter->value.toHexString() << std::endl;
+		ofs << std::setw(40) << printable(iter->key) << std::setw(40) << printable(iter->value) << std::endl;
 	}
 
 	std::cout << "End of dumping cycle output" << std::endl;
@@ -71,7 +72,6 @@ struct CycleWorkload : TestWorkload {
 
 	std::string description() const override { return "CycleWorkload"; }
 	Future<Void> setup(Database const& cx) override {
-		cycleStarted = true;
 		return bulkSetup(cx, this, nodeCount, Promise<double>());
 	}
 	Future<Void> start(Database const& cx) override {
@@ -277,7 +277,7 @@ struct CycleWorkload : TestWorkload {
 					ok = self->cycleCheckData(data, v) && ok;
 
 					// print out data
-
+					saveToFile(data);
 					break;
 				} catch (Error& e) {
 					retryCount++;
@@ -287,6 +287,7 @@ struct CycleWorkload : TestWorkload {
 			}
 		}
 		cycleCompleted.trigger();
+		wait(loggingCompleted.onTrigger());
 		return ok;
 	}
 };

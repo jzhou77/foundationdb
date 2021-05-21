@@ -869,13 +869,17 @@ ACTOR Future<Void> commitQueue(Reference<TLogGroupData> self) {
 
 ACTOR Future<Void> tLogCommit(Reference<TLogGroupData> self,
                               TLogCommitRequest req,
-                              Reference<LogGenerationData> logData) {
+                              Reference<LogGenerationData> logData, UID tlogId) {
 	state Span span("TLog:tLogCommit"_loc, req.spanID);
 	state Optional<UID> tlogDebugID;
 	if (req.debugID.present()) {
 		tlogDebugID = nondeterministicRandom()->randomUniqueID();
 		g_traceBatch.addAttach("CommitAttachID", req.debugID.get().first(), tlogDebugID.get().first());
 		g_traceBatch.addEvent("CommitDebug", tlogDebugID.get().first(), "TLog.tLogCommit.BeforeWaitForVersion");
+		TraceEvent("CommitDebug", tlogId)
+		    .detail("Version", logData->version.get())
+		    .detail("ReqVersion", req.version)
+		    .detail("PrevVersion", req.prevVersion);
 	}
 
 	logData->minKnownCommittedVersion = std::max(logData->minKnownCommittedVersion, req.minKnownCommittedVersion);
@@ -970,6 +974,11 @@ ACTOR Future<Void> tLogPeekMessages(TLogPeekRequest req,
 
 		for (const auto& tuple : storageTeamData->versionMessages) {
 			const Version& version = std::get<Version>(tuple);
+			const StringRef& messages = std::get<StringRef>(tuple);
+			const Arena& arena = std::get<Arena>(tuple);
+			// Skip empty version message
+			if (messages.size() == 0) continue;
+
 			if (version < req.beginVersion) {
 				continue;
 			}
@@ -982,8 +991,6 @@ ACTOR Future<Void> tLogPeekMessages(TLogPeekRequest req,
 			reply.end = version;
 
 			serializer.startVersionWriting(version);
-			const StringRef& messages = std::get<StringRef>(tuple);
-			const Arena& arena = std::get<Arena>(tuple);
 
 			// TODO: instead of deserializing, just sends it out
 			ProxyTLogMessageHeader header;
@@ -1157,7 +1164,7 @@ ACTOR Future<Void> serveTLogInterface_PassivelyPull(
 				std::cout << "tlog_stopped " << tli.id().toString() << " \n";
 				req.reply.sendError(tlog_stopped());
 			} else {
-				self->addActors.send(tLogCommit(logData->tlogGroupData, req, logData));
+				self->addActors.send(tLogCommit(logData->tlogGroupData, req, logData, tli.id()));
 			}
 		}
 		when(TLogPeekRequest req = waitNext(tli.peekMessages.getFuture())) {

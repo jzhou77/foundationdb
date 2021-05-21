@@ -197,6 +197,7 @@ void startFakeStorageServer(std::vector<Future<Void>>& actors, std::shared_ptr<T
 	for (int i = 0; i < pTestDriverContext->numStorageServers; ++i) {
 		std::shared_ptr<FakeStorageServerContext> pFakeStorageServerContext(new FakeStorageServerContext);
 		pFakeStorageServerContext->pTestDriverContext = pTestDriverContext;
+		// Seems wrong here!
 		pFakeStorageServerContext->pStorageServerInterface = pTestDriverContext->storageServerInterfaces[i];
 
 		actors.emplace_back(

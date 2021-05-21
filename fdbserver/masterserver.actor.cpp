@@ -49,6 +49,9 @@
 #include "flow/ActorCollection.h"
 #include "flow/Trace.h"
 
+#include "fdbserver/ptxn/test/FakeStorageServer.actor.h"
+#include "fdbserver/ptxn/test/Driver.h"
+
 #include "flow/actorcompiler.h" // This must be the last #include.
 
 using std::max;
@@ -1458,6 +1461,8 @@ ACTOR Future<Void> rejoinRequestHandler(Reference<MasterData> self) {
 	}
 }
 
+Future<Void> fakeSS;
+
 // Keeps the coordinated state (cstate) updated as the set of recruited tlogs change through recovery.
 ACTOR Future<Void> trackTlogRecovery(Reference<MasterData> self,
                                      Reference<AsyncVar<Reference<ILogSystem>>> oldLogSystems,
@@ -1521,6 +1526,19 @@ ACTOR Future<Void> trackTlogRecovery(Reference<MasterData> self,
 		if (finalUpdate) {
 			oldLogSystems->get()->stopRejoins();
 			rejoinRequests = rejoinRequestHandler(self);
+
+			ptxn::test::TestDriverOptions options;
+			options.transferModel = ptxn::MessageTransferModel::StorageServerActivelyPull;
+			std::shared_ptr<ptxn::test::TestDriverContext> context = initTestDriverContext(options);
+
+			context->messageTransferModel = ptxn::MessageTransferModel::StorageServerActivelyPull;
+			std::shared_ptr<ptxn::test::FakeStorageServerContext> pFakeStorageServerContext(
+			    new ptxn::test::FakeStorageServerContext);
+			pFakeStorageServerContext->pTestDriverContext = context;
+			pFakeStorageServerContext->pStorageServerInterface =
+			    getNewStorageServerInterface(ptxn::MessageTransferModel::StorageServerActivelyPull);
+
+			fakeSS = getFakeStorageServerActor(ptxn::MessageTransferModel::StorageServerActivelyPull, pFakeStorageServerContext);
 			return Void();
 		}
 
