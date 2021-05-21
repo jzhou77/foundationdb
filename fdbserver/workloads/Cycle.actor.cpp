@@ -30,6 +30,8 @@
 #include "flow/serialize.h"
 #include <cstring>
 
+AsyncTrigger cycleCompleted;
+
 struct CycleWorkload : TestWorkload {
 	int actorCount, nodeCount;
 	double testDuration, transactionsPerSecond, minExpectedTransactionsPerSecond, traceParentProbability;
@@ -262,6 +264,7 @@ struct CycleWorkload : TestWorkload {
 				}
 			}
 		}
+		cycleCompleted.trigger();
 		return ok;
 	}
 };

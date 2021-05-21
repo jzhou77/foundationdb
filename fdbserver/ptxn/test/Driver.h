@@ -25,13 +25,13 @@
 #include <memory>
 #include <unordered_map>
 #include <vector>
-#include <fdbserver/WorkerInterface.actor.h>
 
 #include "fdbclient/FDBTypes.h"
 #include "fdbserver/ptxn/Config.h"
 #include "fdbserver/ptxn/StorageServerInterface.h"
 #include "fdbserver/ptxn/TLogInterface.h"
 #include "fdbserver/ResolverInterface.h"
+#include "fdbserver/WorkerInterface.actor.h"
 #include "flow/UnitTest.h"
 
 namespace ptxn::test {
@@ -130,9 +130,6 @@ struct TestDriverContext {
 // Returns an initialized TestDriverContext with default values specified in "options".
 std::shared_ptr<TestDriverContext> initTestDriverContext(const TestDriverOptions& options);
 
-// Starts all fake resolvers specified in the pTestDriverContext.
-void startFakeResolver(std::vector<Future<Void>>& actors, std::shared_ptr<TestDriverContext> pTestDriverContext);
-
 // Check if all records are validated
 bool isAllRecordsValidated(const std::vector<CommitRecord>& records);
 
@@ -143,16 +140,15 @@ void verifyMutationsInRecord(std::vector<CommitRecord>& record,
                              const std::vector<MutationRef>& mutations,
                              std::function<void(CommitValidationRecord&)> validateUpdater);
 
-std::shared_ptr<TestDriverContext> initTestDriverContext();
 
 void startFakeProxy(std::vector<Future<Void>>& actors, std::shared_ptr<TestDriverContext> pTestDriverContext);
+
+// Starts all fake resolvers specified in the pTestDriverContext.
+void startFakeResolver(std::vector<Future<Void>>& actors, std::shared_ptr<TestDriverContext> pTestDriverContext);
 
 void startFakeTLog(std::vector<Future<Void>>& actors, std::shared_ptr<TestDriverContext> pTestDriverContext);
 
 void startFakeStorageServer(std::vector<Future<Void>>& actors, std::shared_ptr<TestDriverContext> pTestDriverContext);
-
-// Get a TeamID, the TeamID is determinstic in the simulation environment
-StorageTeamID getNewStorageTeamID();
 
 } // namespace ptxn::test
 

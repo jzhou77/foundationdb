@@ -32,6 +32,7 @@
 #include "flow/flow.h"
 
 #include "flow/actorcompiler.h"
+extern AsyncTrigger cycleCompleted;
 
 namespace ptxn::test {
 
@@ -93,7 +94,7 @@ ACTOR Future<Void> fakeProxy(std::shared_ptr<FakeProxyContext> pFakeProxyContext
 		std::cout << "Skipped commit persistence validation\n";
 		return Void();
 	}
-
+	/* FIXME Comment out for demo purpuse
 	// Wait for all commits being completed persisted/timeout
 	state int numChecks = 0;
 	loop {
@@ -104,7 +105,7 @@ ACTOR Future<Void> fakeProxy(std::shared_ptr<FakeProxyContext> pFakeProxyContext
 			throw internal_error_msg("Timeout waiting persistence");
 		}
 		wait(delay(CHECK_PERSIST_INTERVAL));
-	}
+	} */
 
 	return Void();
 }

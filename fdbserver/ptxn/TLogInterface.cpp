@@ -26,6 +26,10 @@ MessageTransferModel TLogInterfaceBase::getMessageTransferModel() const {
 	return messageTransferModel;
 }
 
+void TLogInterfaceBase::initEndpoints() {
+	initEndpointsImpl();
+}
+
 void TLogInterfaceBase::initEndpointsImpl(std::vector<ReceiverPriorityPair>&& receivers) {
 	receivers.push_back(commit.getReceiver(TaskPriority::TLogCommit));
 	receivers.push_back(lock.getReceiver());
@@ -34,29 +38,33 @@ void TLogInterfaceBase::initEndpointsImpl(std::vector<ReceiverPriorityPair>&& re
 	receivers.push_back(waitFailure.getReceiver());
 	receivers.push_back(recoveryFinished.getReceiver());
 	receivers.push_back(snapRequest.getReceiver());
+
 	FlowTransport::transport().addEndpoints(receivers);
 }
 
-void TLogInterface_ActivelyPush::initEndpoints() {
-	TLogInterfaceBase::initEndpointsImpl({});
+void TLogInterface_ActivelyPush::initEndpointsImpl(std::vector<ReceiverPriorityPair>&& receivers) {
+	TLogInterfaceBase::initEndpointsImpl(std::move(receivers));
 }
 
-void TLogInterface_PassivelyPull::initEndpoints() {
-	TLogInterfaceBase::initEndpointsImpl({ peekMessages.getReceiver(TaskPriority::TLogPeek),
-	                                       popMessages.getReceiver(TaskPriority::TLogPop),
-	                                       disablePopRequest.getReceiver(),
-	                                       enablePopRequest.getReceiver() });
+void TLogInterface_PassivelyPull::initEndpointsImpl(std::vector<ReceiverPriorityPair>&& receivers) {
+	for (const auto& item : { peekMessages.getReceiver(TaskPriority::TLogPeek),
+	                          popMessages.getReceiver(TaskPriority::TLogPop),
+	                          disablePopRequest.getReceiver(),
+	                          enablePopRequest.getReceiver() }) {
+		receivers.push_back(item);
+	}
+	TLogInterfaceBase::initEndpointsImpl(std::move(receivers));
 }
 
 std::shared_ptr<TLogInterfaceBase> getNewTLogInterface(const MessageTransferModel model,
-                                                       UID id_,
-                                                       UID sharedTLogID_,
-                                                       LocalityData locality) {
+                                                       const UID& id,
+                                                       const UID& sharedTLogID,
+                                                       const LocalityData& locality) {
 	switch (model) {
 	case MessageTransferModel::TLogActivelyPush:
 		return std::make_shared<TLogInterface_ActivelyPush>();
 	case MessageTransferModel::StorageServerActivelyPull:
-		return std::make_shared<TLogInterface_PassivelyPull>(id_, sharedTLogID_, locality);
+		return std::make_shared<TLogInterface_PassivelyPull>(id, sharedTLogID, locality);
 	default:
 		throw internal_error_msg("Unsupported TLog Interface");
 	}

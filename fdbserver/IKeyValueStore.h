@@ -25,28 +25,41 @@
 #include "fdbclient/FDBTypes.h"
 #include "fdbserver/Knobs.h"
 
+// IClosable is a base interface for any disk-backed data structure that needs to support asynchronous errors, shutdown
+// and deletion
 class IClosable {
 public:
-	// IClosable is a base interface for any disk-backed data structure that needs to support asynchronous errors,
-	// shutdown and deletion
+	// asynchronously throws an error if there is an internal error. Never set inside (on the stack of) a call to
+	// another API function on this object.
+	virtual Future<Void> getError() = 0;
 
-	virtual Future<Void> getError() = 0; // asynchronously throws an error if there is an internal error. Never set
-	                                     // inside (on the stack of) a call to another API function on this object.
-	virtual Future<Void> onClosed() = 0; // the future is set to Void when this is totally shut down after dispose() or
-	                                     // close().  But this function cannot be called after dispose or close!
-	virtual void dispose() = 0; // permanently delete the data AND invalidate this interface
-	virtual void close() = 0; // invalidate this interface, but do not delete the data.  Outstanding operations may or
-	                          // may not take effect in the background.
+	// the future is set to Void when this is totally shut down after dispose() or close().  But this function cannot be
+	// called after dispose or close!
+	virtual Future<Void> onClosed() = 0;
+
+	// permanently delete the data AND invalidate this interface
+	virtual void dispose() = 0;
+
+	// invalidate this interface, but do not delete the data. Outstanding operations may or may not take effect in the
+	// background.
+	virtual void close() = 0;
 };
 
 class IKeyValueStore : public IClosable {
 public:
+	// Gets the subclass type of KeyValueStore
 	virtual KeyValueStoreType getType() const = 0;
-	virtual void set(KeyValueRef keyValue, const Arena* arena = nullptr) = 0;
-	virtual void clear(KeyRangeRef range, const Arena* arena = nullptr) = 0;
-	virtual Future<Void> commit(
-	    bool sequential = false) = 0; // returns when prior sets and clears are (atomically) durable
 
+	// Sets a value to a key
+	virtual void set(KeyValueRef keyValue, const Arena* arena = nullptr) = 0;
+
+	// Clears a key range
+	virtual void clear(KeyRangeRef range, const Arena* arena = nullptr) = 0;
+
+	// returns when prior sets and clears are (atomically) durable
+	virtual Future<Void> commit(bool sequential = false) = 0;
+
+	// Reads the value for a given key
 	virtual Future<Optional<Value>> readValue(KeyRef key, Optional<UID> debugID = Optional<UID>()) = 0;
 
 	// Like readValue(), but returns only the first maxLength bytes of the value if it is longer
@@ -143,7 +156,6 @@ inline IKeyValueStore* openKVStore(KeyValueStoreType storeType,
 	default:
 		UNREACHABLE();
 	}
-	UNREACHABLE(); // FIXME: is this right?
 }
 
 void GenerateIOLogChecksumFile(std::string filename);

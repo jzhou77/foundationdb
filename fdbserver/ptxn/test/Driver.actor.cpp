@@ -146,7 +146,8 @@ std::shared_ptr<TLogInterfaceBase> TestDriverContext::getTLogInterface(const Sto
 	return tLogGroupLeaders.at(storageTeamIDTLogGroupIDMapper.at(storageTeamID));
 }
 
-std::shared_ptr<StorageServerInterfaceBase> TestDriverContext::getStorageServerInterface(const StorageTeamID& storageTeamID) {
+std::shared_ptr<StorageServerInterfaceBase> TestDriverContext::getStorageServerInterface(
+    const StorageTeamID& storageTeamID) {
 	return storageTeamIDStorageServerInterfaceMapper.at(storageTeamID);
 }
 
@@ -194,8 +195,10 @@ void startFakeTLog(std::vector<Future<Void>>& actors, std::shared_ptr<TestDriver
 
 void startFakeStorageServer(std::vector<Future<Void>>& actors, std::shared_ptr<TestDriverContext> pTestDriverContext) {
 	for (int i = 0; i < pTestDriverContext->numStorageServers; ++i) {
-		std::shared_ptr<FakeStorageServerContext> pFakeStorageServerContext(
-		    new FakeStorageServerContext{ pTestDriverContext, pTestDriverContext->storageServerInterfaces[i] });
+		std::shared_ptr<FakeStorageServerContext> pFakeStorageServerContext(new FakeStorageServerContext);
+		pFakeStorageServerContext->pTestDriverContext = pTestDriverContext;
+		pFakeStorageServerContext->pStorageServerInterface = pTestDriverContext->storageServerInterfaces[i];
+
 		actors.emplace_back(
 		    getFakeStorageServerActor(pTestDriverContext->messageTransferModel, pFakeStorageServerContext));
 	}
@@ -216,7 +219,8 @@ void verifyMutationsInRecord(std::vector<CommitRecord>& records,
                              const std::vector<MutationRef>& mutations,
                              std::function<void(CommitValidationRecord&)> validateUpdater) {
 	for (auto& record : records) {
-		if (record.version == version && record.storageTeamID == storageTeamID && record.mutations.size() == mutations.size()) {
+		if (record.version == version && record.storageTeamID == storageTeamID &&
+		    record.mutations.size() == mutations.size()) {
 			bool isSame = true;
 			for (size_t i = 0; i < mutations.size(); ++i) {
 				if (!(record.mutations[i].type == mutations[i].type &&
@@ -244,21 +248,23 @@ void verifyMutationsInRecord(std::vector<CommitRecord>& records,
 
 } // namespace ptxn::test
 
+extern AsyncTrigger cycleCompleted;
+
 TEST_CASE("/fdbserver/ptxn/test/driver") {
 	using namespace ptxn::test;
 
 	TestDriverOptions options(params);
 
 	std::shared_ptr<TestDriverContext> context = initTestDriverContext(options);
-	std::cout << 1 << std::endl;
 	std::vector<Future<Void>> actors;
-	std::cout << 2 << std::endl;
 
 	startFakeProxy(actors, context);
 	startFakeTLog(actors, context);
 	startFakeStorageServer(actors, context);
 
 	wait(quorum(actors, 1));
+	cycleCompleted.trigger();
+	wait(delay(1.0));
 
 	return Void();
 }

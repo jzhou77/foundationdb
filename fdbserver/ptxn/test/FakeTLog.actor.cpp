@@ -248,7 +248,7 @@ ACTOR Future<Void> fakeTLog_ActivelyPush(std::shared_ptr<FakeTLogContext> pFakeT
 			        pTestDriverContext->getStorageServerInterface(commitRequest.storageTeamID));
 			state StorageServerPushReply reply = wait(pStorageServerInterface->pushRequests.getReply(request));
 		}
-		when(TLogPeekRequest peekRequest = waitNext(pTLogInterface->peek.getFuture())) {
+		when(TLogPeekRequest peekRequest = waitNext(pTLogInterface->peekMessages.getFuture())) {
 			fakeTLogPeek(peekRequest, pFakeTLogContext);
 		}
 	}
@@ -267,7 +267,7 @@ ACTOR Future<Void> fakeTLog_PassivelyProvide(std::shared_ptr<FakeTLogContext> pF
 			state std::vector<SubsequenceMutationItem> seqMutations;
 			processTLogCommitRequest(pFakeTLogContext, commitRequest, header, seqMutations);
 		}
-		when(TLogPeekRequest peekRequest = waitNext(pTLogInterface->peek.getFuture())) {
+		when(TLogPeekRequest peekRequest = waitNext(pTLogInterface->peekMessages.getFuture())) {
 			fakeTLogPeek(peekRequest, pFakeTLogContext);
 		}
 	}

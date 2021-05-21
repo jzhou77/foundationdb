@@ -81,7 +81,7 @@ struct StorageServerPushRequest {
 struct StorageServerInterfaceBase {
 	MessageTransferModel getMessageTransferModel() const { return messageTransferModel; }
 
-	virtual void initEndpoints() = 0;
+	void initEndpoints();
 
 protected:
 	MessageTransferModel messageTransferModel;
@@ -89,7 +89,7 @@ protected:
 	explicit StorageServerInterfaceBase(const MessageTransferModel messageTransferModel_)
 	  : messageTransferModel(messageTransferModel_) {}
 
-	void initEndpointsImpl(std::vector<ReceiverPriorityPair>&& receivers);
+	virtual void initEndpointsImpl(std::vector<ReceiverPriorityPair>&& receivers = {});
 
 	template <typename Ar>
 	void serializeImpl(Ar& ar) {
@@ -107,7 +107,8 @@ struct StorageServerInterface_ActivelyPull : public StorageServerInterfaceBase {
 		StorageServerInterfaceBase::serializeImpl(ar);
 	}
 
-	void initEndpoints();
+protected:
+	virtual void initEndpointsImpl(std::vector<ReceiverPriorityPair>&& receivers = {}) override;
 };
 
 struct StorageServerInterface_PassivelyReceive : public StorageServerInterfaceBase {
@@ -123,7 +124,8 @@ struct StorageServerInterface_PassivelyReceive : public StorageServerInterfaceBa
 		StorageServerInterfaceBase::serializeImpl(ar);
 	}
 
-	void initEndpoints();
+protected:
+	virtual void initEndpointsImpl(std::vector<ReceiverPriorityPair>&& receivers = {}) override;
 };
 
 std::shared_ptr<StorageServerInterfaceBase> getNewStorageServerInterface(const MessageTransferModel model);

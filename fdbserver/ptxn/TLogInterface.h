@@ -161,8 +161,17 @@ struct TLogPeekRequest {
 
 	template <typename Ar>
 	void serialize(Ar& ar) {
-		serializer(
-		    ar, debugID, arena, beginVersion, endVersion, storageTeamID, tag, returnIfBlocked, onlySpilled, sequence, reply);
+		serializer(ar,
+		           debugID,
+		           arena,
+		           beginVersion,
+		           endVersion,
+		           storageTeamID,
+		           tag,
+		           returnIfBlocked,
+		           onlySpilled,
+		           sequence,
+		           reply);
 	}
 };
 
@@ -335,8 +344,8 @@ struct TLogInterfaceBase {
 	constexpr static FileIdentifier file_identifier = 4121433;
 
 	RequestStream<TLogCommitRequest> commit;
-	RequestStream<TLogPeekRequest> peek;
-	RequestStream<TLogPopRequest> pop;
+	RequestStream<TLogPeekRequest> peekMessages;
+	RequestStream<TLogPopRequest> popMessages;
 	RequestStream<ReplyPromise<TLogLockResult>> lock; // first stage of database recovery
 	RequestStream<TLogQueuingMetricsRequest> getQueuingMetrics;
 	RequestStream<TLogConfirmRunningRequest> confirmRunning; // used for getReadVersion requests from client
@@ -354,7 +363,7 @@ struct TLogInterfaceBase {
 
 	MessageTransferModel getMessageTransferModel() const;
 
-	virtual void initEndpoints() = 0;
+	void initEndpoints();
 
 protected:
 	UID uniqueID;
@@ -381,7 +390,7 @@ protected:
 	                  const MessageTransferModel& model_ = MessageTransferModel::StorageServerActivelyPull)
 	  : uniqueID(id_), sharedTLogID(sharedTLogID_), filteredLocality(locality_), messageTransferModel(model_) {}
 
-	void initEndpointsImpl(std::vector<ReceiverPriorityPair>&& receivers);
+	virtual void initEndpointsImpl(std::vector<ReceiverPriorityPair>&& receivers = {});
 
 	template <typename Ar>
 	void serializeImpl(Ar& ar) {
@@ -390,8 +399,8 @@ protected:
 		}
 		serializer(ar, uniqueID, sharedTLogID, filteredLocality, messageTransferModel, commit);
 		if (Ar::isDeserializing) {
-			peek = RequestStream<TLogPeekRequest>(commit.getEndpoint().getAdjustedEndpoint(1));
-			pop = RequestStream<TLogPopRequest>(commit.getEndpoint().getAdjustedEndpoint(2));
+			peekMessages = RequestStream<TLogPeekRequest>(commit.getEndpoint().getAdjustedEndpoint(1));
+			popMessages = RequestStream<TLogPopRequest>(commit.getEndpoint().getAdjustedEndpoint(2));
 			lock = RequestStream<ReplyPromise<TLogLockResult>>(commit.getEndpoint().getAdjustedEndpoint(3));
 			getQueuingMetrics = RequestStream<TLogQueuingMetricsRequest>(commit.getEndpoint().getAdjustedEndpoint(4));
 			confirmRunning = RequestStream<TLogConfirmRunningRequest>(commit.getEndpoint().getAdjustedEndpoint(5));
@@ -412,46 +421,52 @@ struct TLogInterface_ActivelyPush : public TLogInterfaceBase {
 
 	TLogInterface_ActivelyPush() : TLogInterfaceBase(MessageTransferModel::TLogActivelyPush) {}
 
-	void initEndpoints() override;
+protected:
+	virtual void initEndpointsImpl(std::vector<ReceiverPriorityPair>&& receiver = {}) override;
 };
 
 struct TLogInterface_PassivelyPull : public TLogInterfaceBase {
 	constexpr static FileIdentifier file_identifier = 748550;
 
-	RequestStream<TLogPeekRequest> peekMessages;
-	RequestStream<TLogPopRequest> popMessages;
 	RequestStream<TLogDisablePopRequest> disablePopRequest;
 	RequestStream<TLogEnablePopRequest> enablePopRequest;
 
 	template <typename Ar>
 	void serialize(Ar& ar) {
 		TLogInterfaceBase::serializeImpl(ar);
-		serializer(ar, peekMessages);
+		serializer(ar, disablePopRequest);
 		if (Ar::isDeserializing) {
-			popMessages = RequestStream<TLogPopRequest>(peekMessages.getEndpoint().getAdjustedEndpoint(1));
-			disablePopRequest = RequestStream<TLogDisablePopRequest>(peekMessages.getEndpoint().getAdjustedEndpoint(2));
-			enablePopRequest = RequestStream<TLogEnablePopRequest>(peekMessages.getEndpoint().getAdjustedEndpoint(3));
+			enablePopRequest =
+			    RequestStream<TLogEnablePopRequest>(disablePopRequest.getEndpoint().getAdjustedEndpoint(1));
 		}
 	}
 
-	TLogInterface_PassivelyPull() : TLogInterfaceBase(LocalityData()) {}
+	TLogInterface_PassivelyPull()
+	  : TLogInterfaceBase(LocalityData(), MessageTransferModel::StorageServerActivelyPull) {}
 
 	explicit TLogInterface_PassivelyPull(const LocalityData& locality_)
-	  : TLogInterfaceBase(deterministicRandom()->randomUniqueID(), locality_) {}
+	  : TLogInterfaceBase(deterministicRandom()->randomUniqueID(),
+	                      locality_,
+	                      MessageTransferModel::StorageServerActivelyPull) {}
 
-	TLogInterface_PassivelyPull(const UID sharedLogId_, const LocalityData& locality_)
-	  : TLogInterfaceBase(deterministicRandom()->randomUniqueID(), sharedLogId_, locality_) {}
+	TLogInterface_PassivelyPull(const UID& sharedLogId_, const LocalityData& locality_)
+	  : TLogInterfaceBase(deterministicRandom()->randomUniqueID(),
+	                      sharedLogId_,
+	                      locality_,
+	                      MessageTransferModel::StorageServerActivelyPull) {}
 
-	TLogInterface_PassivelyPull(const UID id_, const UID sharedLogId_, LocalityData& locality_)
-	  : TLogInterfaceBase(id_, sharedLogId_, locality_) {}
+	TLogInterface_PassivelyPull(const UID& id_, const UID sharedLogId_, const LocalityData& locality_)
+	  : TLogInterfaceBase(id_, sharedLogId_, locality_, MessageTransferModel::StorageServerActivelyPull) {}
 
-	void initEndpoints() override;
+protected:
+	virtual void initEndpointsImpl(std::vector<ReceiverPriorityPair>&& receiver = {}) override;
 };
 
-std::shared_ptr<TLogInterfaceBase> getNewTLogInterface(const MessageTransferModel model,
-                                                       UID id_ = deterministicRandom()->randomUniqueID(),
-                                                       UID sharedTLogID_ = deterministicRandom()->randomUniqueID(),
-                                                       LocalityData locality = LocalityData());
+std::shared_ptr<TLogInterfaceBase> getNewTLogInterface(
+    const MessageTransferModel model,
+    const UID& id = deterministicRandom()->randomUniqueID(),
+    const UID& sharedTLogID = deterministicRandom()->randomUniqueID(),
+    const LocalityData& locality = LocalityData());
 
 } // namespace ptxn
 
