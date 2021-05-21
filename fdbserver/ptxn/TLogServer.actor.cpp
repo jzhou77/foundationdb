@@ -1154,6 +1154,7 @@ ACTOR Future<Void> serveTLogInterface_PassivelyPull(
 			Reference<LogGenerationData> logData = tlogGroup->second;
 			TEST(logData->stopped); // TLogCommitRequest while stopped
 			if (logData->stopped) {
+				std::cout << "tlog_stopped " << tli.id().toString() << " \n";
 				req.reply.sendError(tlog_stopped());
 			} else {
 				self->addActors.send(tLogCommit(logData->tlogGroupData, req, logData));

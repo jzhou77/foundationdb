@@ -1234,7 +1234,6 @@ ACTOR Future<Void> postResolution(CommitBatchContext* self) {
 			ptxn::test::print::print(commitRequest);
 			std::cout << "Sent to: " << it->id().toString() << "\n";
 			teamReplies.push_back(it->commit.getReply(commitRequest));
-			break;
 		}
 	}
 	wait(waitForAll(teamReplies));
