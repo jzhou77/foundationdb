@@ -25,6 +25,8 @@
 #include <string>
 #include <vector>
 
+#include "fdbclient/FDBTypes.h"
+#include "fdbserver/ptxn/TLogInterface.h"
 #include "fdbserver/ptxn/test/Driver.h"
 #include "fdbserver/ptxn/test/Utils.h"
 #include "fdbserver/ptxn/TLogPeekCursor.actor.h"
@@ -50,9 +52,17 @@ FakeStorageServerContext::FakeStorageServerContext()
 }
 
 void FakeStorageServerContext::initializePeekCursor() {
+	std::vector<TLogInterface_PassivelyPull> tLogInterfaces = getDemoTLogInterface(demoTeam);
+
+	for (auto& tLogInterface : tLogInterfaces) {
+		TLogInterfaceBase *interf = new TLogInterface_PassivelyPull(tLogInterface);
+		cursorPtrs.emplace_back(std::make_unique<StorageTeamPeekCursor>(0, demoTeam, interf));
+	}
+/*
 	for (auto& [storageTeamID, tLogInterface] : pTestDriverContext->storageTeamIDTLogInterfaceMapper) {
 		cursorPtrs.emplace_back(std::make_unique<StorageTeamPeekCursor>(0, storageTeamID, tLogInterface.get()));
 	}
+*/
 }
 
 namespace {
@@ -65,34 +75,25 @@ void markStorageServerValidated(CommitValidationRecord& record) {
 ACTOR Future<Void> writeKeyValuesToFile(std::shared_ptr<FakeStorageServerContext> pContext) {
 	std::string filePath = concatToString("fakeStorageServer/", pContext->id.toString(), "/");
 	platform::createDirectory(filePath);
-	std::string fileName = concatToString(filePath, pContext->lastVersion);
+	std::string fileName = "StorageServer-output.txt"; // concatToString(filePath, pContext->lastVersion);
 
 	std::cout << "Write FakeStorageServer " << pContext->id.toString() << " content to " << fileName << std::endl
 	          << std::endl;
 
 	state std::ofstream ofs(fileName, std::ios::out);
-	ofs << "FakeStorageServer " << pContext->id.toString() << " at version " << pContext->lastVersion << std::endl;
+	std::cout << "FakeStorageServer " << pContext->id.toString() << " at version " << std::endl;
 
 	state KeyRef startKey = "A"_sr;
 	state KeyRef endKey = "z"_sr;
-	state std::map<StringRef, StringRef> kvPairs;
 
 	KeyRangeRef range(startKey, endKey);
 	RangeResult rangeResult = wait(pContext->pStorageEngine->readRange(range));
 	std::cout << "Number of key-value pairs: " << rangeResult.size() << std::endl;
 	for (decltype(rangeResult.begin()) iter = rangeResult.begin(); iter != rangeResult.end(); ++iter) {
-		StringRef key(pContext->persistenceArena, iter->key);
-		StringRef value(pContext->persistenceArena, iter->value);
-		std::cout << key.toString() << '\t' << value.toString() << std::endl;
-		kvPairs[key] = value;
+		ofs << std::setw(40) << iter->key.toHexString() << std::setw(40) << iter->value.toHexString() << std::endl;
 	}
 
-	for (const auto& [key, value] : kvPairs) {
-		ofs << std::setw(15) << "Key: " << key.toHexString() << std::endl;
-		ofs << std::setw(15) << "Value: " << value.toHexString() << std::endl;
-	}
-
-	ofs << "End of dumping" << std::endl;
+	std::cout << "End of dumping SS" << std::endl;
 	ofs.close();
 
 	return Void();

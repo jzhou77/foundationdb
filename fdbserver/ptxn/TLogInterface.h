@@ -468,6 +468,10 @@ std::shared_ptr<TLogInterfaceBase> getNewTLogInterface(
     const UID& sharedTLogID = deterministicRandom()->randomUniqueID(),
     const LocalityData& locality = LocalityData());
 
+void addDemoTlogGroupInterface(TLogGroupID gid, const TLogInterface_PassivelyPull& interface);
+
+std::vector<TLogInterface_PassivelyPull> getDemoTLogInterface(StorageTeamID team);
+
 } // namespace ptxn
 
 #endif // FDBSERVER_PTXN_TLOGINTERFACE_H

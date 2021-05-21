@@ -47,6 +47,7 @@
 #include "fdbserver/WorkerInterface.actor.h"
 #include "fdbserver/ptxn/ProxyTLogPushMessageSerializer.h"
 #include "fdbserver/ptxn/TLogInterface.h"
+#include "fdbserver/ptxn/test/Utils.h"
 #include "flow/ActorCollection.h"
 #include "flow/IRandom.h"
 #include "flow/Knobs.h"
@@ -1217,19 +1218,24 @@ ACTOR Future<Void> postResolution(CommitBatchContext* self) {
 		if (team != ptxn::demoTeam) continue;
 
 		// TODO: Find demo team's tlog
-		std::shared_ptr<ptxn::TLogInterfaceBase> tli;
+		std::vector<ptxn::TLogInterface_PassivelyPull> tlis = ptxn::getDemoTLogInterface(ptxn::demoTeam);
 
 		// TODO: find team's prevVersion
-		ptxn::TLogCommitRequest commitRequest(span.context,
-		                                      team,
-		                                      data.arena(),
-		                                      data,
-		                                      self->prevVersion,
-		                                      self->commitVersion,
-		                                      pProxyCommitData->committedVersion.get(),
-		                                      pProxyCommitData->minKnownCommittedVersion,
-		                                      self->debugID);
-		//teamReplies.push_back(tli->commit.getReply(commitRequest));
+		for (auto it = tlis.rbegin(); it != tlis.rend(); it++) {
+			ptxn::TLogCommitRequest commitRequest(span.context,
+			                                      team,
+			                                      data.arena(),
+			                                      data,
+			                                      self->prevVersion,
+			                                      self->commitVersion,
+			                                      pProxyCommitData->committedVersion.get(),
+			                                      pProxyCommitData->minKnownCommittedVersion,
+			                                      deterministicRandom()->randomUniqueID());
+			ptxn::test::print::print(commitRequest);
+			std::cout << "Sent to: " << it->id().toString() << "\n";
+			teamReplies.push_back(it->commit.getReply(commitRequest));
+			break;
+		}
 	}
 	wait(waitForAll(teamReplies));
 

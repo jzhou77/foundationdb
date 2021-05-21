@@ -1115,6 +1115,7 @@ ACTOR Future<Void> serveTLogInterface_PassivelyPull(
 
 	state UID recruitmentID = activeGeneration->begin()->second->recruitmentID;
 	state Future<Void> dbInfoChange = Void();
+	std::cout << "TLog started " << tli.id().toString() << " \n";
 	loop choose {
 		when(wait(dbInfoChange)) {
 			dbInfoChange = self->dbInfo->onChange();
@@ -1138,9 +1139,15 @@ ACTOR Future<Void> serveTLogInterface_PassivelyPull(
 			}
 		}
 		when(TLogCommitRequest req = waitNext(tli.commit.getFuture())) {
+			std::cout << "TLog got " << tli.id().toString() << " \n";
+			test::print::print(req);
 			auto tlogGroup = activeGeneration->find(req.storageTeamID);
 			TEST(tlogGroup == activeGeneration->end()); // TLog group not found
 			if (tlogGroup == activeGeneration->end()) {
+				for (auto& logData : *activeGeneration) {
+					std::cout << "tlog_group_not_found " << logData.first.toString() << "\n";
+				}
+				ASSERT(false);
 				req.reply.sendError(tlog_group_not_found());
 				continue;
 			}
@@ -1152,7 +1159,7 @@ ACTOR Future<Void> serveTLogInterface_PassivelyPull(
 				self->addActors.send(tLogCommit(logData->tlogGroupData, req, logData));
 			}
 		}
-		when(TLogPeekRequest req = waitNext(tli.peek.getFuture())) {
+		when(TLogPeekRequest req = waitNext(tli.peekMessages.getFuture())) {
 			// TraceEvent("TLogPeekReq")
 			//    .detail("BeginVersion", req.beginVersion)
 			//    .detail("StorageTeam", req.storageTeamID)
@@ -1383,6 +1390,7 @@ ACTOR Future<Void> tlogGroupStart(Reference<TLogGroupData> self, Reference<LogGe
 	return Void();
 }
 
+
 // Start the tLog role for a worker
 ACTOR Future<Void> tLogStart(Reference<TLogServerData> self, InitializeTLogRequest req, LocalityData locality) {
 	ASSERT(req.isPrimary);
@@ -1404,30 +1412,29 @@ ACTOR Future<Void> tLogStart(Reference<TLogServerData> self, InitializeTLogReque
 	DUMPTOKEN(recruited.enablePopRequest);
 
 	stopAllTLogs(self, recruited.id());
-	self->removed = rejoinMasters(self, recruited, req.epoch, Future<Void>(Void()), req.isPrimary);
+	// Do not exit.
+	self->removed = Never(); // rejoinMasters(self, recruited, req.epoch, Future<Void>(Void()), req.isPrimary);
 
 	state std::vector<Future<Void>> tlogGroupStarts;
 	state std::shared_ptr<std::unordered_map<StorageTeamID, Reference<LogGenerationData>>> activeGeneration =
 	    std::make_shared<std::unordered_map<StorageTeamID, Reference<LogGenerationData>>>();
-	int i = 2;
 	for (auto& group : req.tlogGroups) {
 		ASSERT(self->tlogGroups.count(group.logGroupId));
 		Reference<TLogGroupData> tlogGroupData = self->tlogGroups[group.logGroupId];
 		ASSERT(group.logGroupId == tlogGroupData->tlogGroupID);
-		std::unordered_map<StorageTeamID, std::vector<Tag>> storageTeams = { { UID(1, ++i), {} } };
 		Reference<LogGenerationData> newGenerationData = makeReference<LogGenerationData>(tlogGroupData,
 		                                                                                  recruited,
 		                                                                                  req.recruitmentID,
 		                                                                                  g_network->protocolVersion(),
 		                                                                                  req.spillType,
-		                                                                                  storageTeams,
+		                                                                                  group.storageTeams,
 		                                                                                  req.locality,
 		                                                                                  req.epoch,
 		                                                                                  "Recruited");
 
 		tlogGroupData->id_data[recruited.id()] = newGenerationData;
 		newGenerationData->removed = self->removed;
-		for (auto& storageTeam : storageTeams) {
+		for (auto& storageTeam : group.storageTeams) {
 			activeGeneration->emplace(storageTeam.first, newGenerationData);
 		}
 		tlogGroupStarts.push_back(tlogGroupStart(tlogGroupData, newGenerationData));
@@ -1440,6 +1447,8 @@ ACTOR Future<Void> tLogStart(Reference<TLogServerData> self, InitializeTLogReque
 	// std::cout << "---> tlogstart wait sent interfacee\n";
 
 	TraceEvent("TLogStart", recruited.id());
+	addDemoTlogGroupInterface(UID(2, 3), recruited);
+
 	wait(tLogCore(self, activeGeneration, recruited));
 	return Void();
 }
@@ -1632,7 +1641,7 @@ ACTOR Future<Void> commitPeekAndCheck(std::shared_ptr<test::TestDriverContext> p
 	TLogPeekRequest request(debugID, beginVersion, endVersion, storageTeamID);
 	test::print::print(request);
 
-	state TLogPeekReply reply = wait(tli->peek.getReply(request));
+	state TLogPeekReply reply = wait(tli->peekMessages.getReply(request));
 	test::print::print(reply);
 
 	// Verify

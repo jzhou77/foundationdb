@@ -384,6 +384,7 @@ private:
 	}
 
 	void rollRandomClose() {
+		return;
 		if (now() - g_simulator.lastConnectionFailure > g_simulator.connectionFailuresDisableDuration &&
 		    deterministicRandom()->random01() < .00001) {
 			g_simulator.lastConnectionFailure = now();

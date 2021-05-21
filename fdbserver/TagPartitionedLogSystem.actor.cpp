@@ -18,6 +18,7 @@
  * limitations under the License.
  */
 
+#include "fdbclient/FDBTypes.h"
 #include "fdbserver/WorkerInterface.actor.h"
 #include "flow/ActorCollection.h"
 #include "fdbserver/LogSystem.h"
@@ -32,6 +33,26 @@
 #include "fdbserver/LogProtocolMessage.h"
 #include "flow/IRandom.h"
 #include "flow/actorcompiler.h" // This must be the last #include.
+#include "fdbserver/ptxn/TLogInterface.h"
+
+namespace ptxn {
+
+static std::map<TLogGroupID, std::vector<TLogInterface_PassivelyPull>> tlogGroups_;
+
+TLogGroup demoGroup = TLogGroup(UID(2, 3), demoTeam);
+
+void addDemoTlogGroupInterface(TLogGroupID gid, const TLogInterface_PassivelyPull& interface) {
+	auto& p = tlogGroups_[gid];
+	p.push_back(interface);
+	std::cout << "GID: " << gid.toString() << ", IFID: " << interface.id().toString() << "\n";
+}
+
+std::vector<TLogInterface_PassivelyPull> getDemoTLogInterface(StorageTeamID team) {
+	// team -> demoGroup
+	return tlogGroups_[demoGroup.logGroupId];
+}
+
+}
 
 ACTOR Future<Version> minVersionWhenReady(Future<Void> f, std::vector<Future<TLogCommitReply>> replies) {
 	wait(f);
@@ -2890,10 +2911,7 @@ struct TagPartitionedLogSystem : ILogSystem, ReferenceCounted<TagPartitionedLogS
 			req.startVersion = logSystem->tLogs[0]->startVersion;
 			req.logRouterTags = logSystem->logRouterTags;
 			req.txsTags = logSystem->txsTags;
-			auto g1 = ptxn::TLogGroup(), g2 = ptxn::TLogGroup();
-			g1.logGroupId = UID(2, 3);
-			g2.logGroupId = UID(3, 4);
-			req.tlogGroups = { g1, g2 };
+			req.tlogGroups = { ptxn::demoGroup };
 			// TODO: Add TLogGroup here
 		}
 
@@ -3004,6 +3022,7 @@ struct TagPartitionedLogSystem : ILogSystem, ReferenceCounted<TagPartitionedLogS
 			    makeReference<AsyncVar<OptionalInterface<ptxn::TLogInterface_PassivelyPull>>>(
 			        OptionalInterface<ptxn::TLogInterface_PassivelyPull>(reqs[i].ptxnReply.getFuture().get()));
 			logSystem->tLogs[0]->tLogLocalities[i] = recr.tLogs[i].locality;
+			//ptxn::addDemoTlogGroupInterface(ptxn::demoGroup.logGroupId, reqs[i].ptxnReply.getFuture().get());
 		}
 		filterLocalityDataForPolicy(logSystem->tLogs[0]->tLogPolicy, &logSystem->tLogs[0]->tLogLocalities);
 

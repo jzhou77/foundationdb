@@ -426,6 +426,7 @@ struct TLogGroup {
 
 	TLogGroup() {}
 	explicit TLogGroup(TLogGroupID logGroupId) : logGroupId(logGroupId) {}
+	TLogGroup(TLogGroupID gid, StorageTeamID team) : logGroupId(gid) { storageTeams.insert({ team, {} }); }
 
 	template <class Ar>
 	void serialize(Ar& ar) {

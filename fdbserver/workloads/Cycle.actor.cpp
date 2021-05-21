@@ -30,7 +30,23 @@
 #include "flow/serialize.h"
 #include <cstring>
 
+#include <fstream>
+#include <iostream>
+
 AsyncTrigger cycleCompleted;
+bool cycleStarted = false;
+
+void saveToFile(const RangeResult& rangeResult) {
+	std::ofstream ofs("Cycle-output.txt", std::ios::out);
+
+	std::cout << "Number of key-value pairs: " << rangeResult.size() << std::endl;
+	for (decltype(rangeResult.begin()) iter = rangeResult.begin(); iter != rangeResult.end(); ++iter) {
+		ofs << std::setw(40) << iter->key.toHexString() << std::setw(40) << iter->value.toHexString() << std::endl;
+	}
+
+	std::cout << "End of dumping cycle output" << std::endl;
+	ofs.close();
+}
 
 struct CycleWorkload : TestWorkload {
 	int actorCount, nodeCount;
@@ -54,7 +70,10 @@ struct CycleWorkload : TestWorkload {
 	}
 
 	std::string description() const override { return "CycleWorkload"; }
-	Future<Void> setup(Database const& cx) override { return bulkSetup(cx, this, nodeCount, Promise<double>()); }
+	Future<Void> setup(Database const& cx) override {
+		cycleStarted = true;
+		return bulkSetup(cx, this, nodeCount, Promise<double>());
+	}
 	Future<Void> start(Database const& cx) override {
 		for (int c = 0; c < actorCount; c++)
 			clients.push_back(
@@ -256,6 +275,9 @@ struct CycleWorkload : TestWorkload {
 					                                    firstGreaterOrEqual(doubleToTestKey(1.0, self->keyPrefix)),
 					                                    self->nodeCount + 1));
 					ok = self->cycleCheckData(data, v) && ok;
+
+					// print out data
+
 					break;
 				} catch (Error& e) {
 					retryCount++;

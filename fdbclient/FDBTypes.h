@@ -65,6 +65,8 @@ using StorageTeamID = UID;
 const StorageTeamID txsTeam = UID(1, 1);
 
 const StorageTeamID demoTeam = UID(1, 2);
+const StorageTeamID demoTeam2 = UID(1, 3);
+const StorageTeamID demoTeam3 = UID(1, 4);
 
 }	// namespace ptxn
 

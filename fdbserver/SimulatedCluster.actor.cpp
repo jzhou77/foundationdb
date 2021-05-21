@@ -951,6 +951,7 @@ void SimulationConfig::generateNormalConfig(const TestConfig& testConfig) {
 	                              : (std::max(testConfig.minimumReplication,
 	                                          datacenters > 4 ? deterministicRandom()->randomInt(1, 3)
 	                                                          : std::min(deterministicRandom()->randomInt(0, 6), 3)));
+	replication_type = 1;
 	switch (replication_type) {
 	case 0: {
 		TEST(true); // Simulated cluster using custom redundancy mode
