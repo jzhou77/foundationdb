@@ -63,6 +63,7 @@ TestDriverOptions::TestDriverOptions(const UnitTestParameters& params)
     numTLogGroups(params.getInt("numTLogGroups").orDefault(DEFAULT_NUM_TLOG_GROUPS)),
     numStorageServers(params.getInt("numStorageServers").orDefault(DEFAULT_NUM_STORAGE_SERVERS)),
     numResolvers(params.getInt("numResolvers").orDefault(DEFAULT_NUM_RESOLVERS)),
+    skipCommitValidation(params.getBool("skipCommitValidation").orDefault(DEFAULT_SKIP_COMMIT_VALIDATION)),
     transferModel(static_cast<MessageTransferModel>(
         params.getInt("messageTransferModel").orDefault(static_cast<int>(DEFAULT_MESSAGE_TRANSFER_MODEL)))) {}
 
@@ -80,6 +81,8 @@ std::shared_ptr<TestDriverContext> initTestDriverContext(const TestDriverOptions
 		context->storageTeamIDs.push_back(getNewStorageTeamID());
 	}
 
+	context->commitVersionGap = 10000;
+	context->skipCommitValidation = options.skipCommitValidation;
 	// Prepare Proxies
 	context->numProxies = options.numProxies;
 
@@ -88,7 +91,6 @@ std::shared_ptr<TestDriverContext> initTestDriverContext(const TestDriverOptions
 
 	// Prepare TLogInterfaces
 	// For now, each tlog group spans all the TLogs, i.e., number of group numbers == num of TLogs
-
 	context->numTLogs = options.numTLogs;
 	for (int i = 0; i < context->numTLogs; ++i) {
 		context->tLogInterfaces.push_back(getNewTLogInterface(context->messageTransferModel,
@@ -100,7 +102,7 @@ std::shared_ptr<TestDriverContext> initTestDriverContext(const TestDriverOptions
 
 	context->numTLogGroups = options.numTLogGroups;
 	for (int i = 0; i < context->numTLogGroups; ++i) {
-		context->tLogGroups.push_back(TLogGroup(deterministicRandom()->randomUniqueID()));
+		context->tLogGroups.push_back(TLogGroup(randomUID()));
 		context->tLogGroupLeaders[context->tLogGroups.back().logGroupId] =
 		    context->tLogInterfaces[deterministicRandom()->randomInt(0, context->numTLogs)];
 	}
@@ -112,7 +114,7 @@ std::shared_ptr<TestDriverContext> initTestDriverContext(const TestDriverOptions
 		context->storageServerInterfaces.back()->initEndpoints();
 	}
 
-	// Assign teams to interfaces
+	// Assign storage teams to storage interfaces
 	auto assignTeamToInterface = [&](auto& mapper, auto interface) {
 		int numInterfaces = interface.size();
 		int index = 0;
@@ -126,12 +128,14 @@ std::shared_ptr<TestDriverContext> initTestDriverContext(const TestDriverOptions
 	};
 	assignTeamToInterface(context->storageTeamIDStorageServerInterfaceMapper, context->storageServerInterfaces);
 
+	// Assign storage teams to tlog groups
 	for (int i = 0, index = 0; i < context->numStorageTeamIDs; ++i) {
 		const StorageTeamID& storageTeamID = context->storageTeamIDs[i];
 		TLogGroup& tLogGroup = context->tLogGroups[index];
-		context->storageTeamIDTLogInterfaceMapper[storageTeamID] = context->tLogGroupLeaders[tLogGroup.logGroupId];
-		// Ignore tags for now.
+		context->storageTeamIDTLogGroupIDMapper[storageTeamID] = tLogGroup.logGroupId;
+		// TODO: support tags when implementing pop
 		tLogGroup.storageTeams[storageTeamID] = {};
+
 		++index;
 		index %= context->tLogGroups.size();
 	}
@@ -139,7 +143,7 @@ std::shared_ptr<TestDriverContext> initTestDriverContext(const TestDriverOptions
 }
 
 std::shared_ptr<TLogInterfaceBase> TestDriverContext::getTLogInterface(const StorageTeamID& storageTeamID) {
-	return storageTeamIDTLogInterfaceMapper.at(storageTeamID);
+	return tLogGroupLeaders.at(storageTeamIDTLogGroupIDMapper.at(storageTeamID));
 }
 
 std::shared_ptr<StorageServerInterfaceBase> TestDriverContext::getStorageServerInterface(
@@ -147,10 +151,18 @@ std::shared_ptr<StorageServerInterfaceBase> TestDriverContext::getStorageServerI
 	return storageTeamIDStorageServerInterfaceMapper.at(storageTeamID);
 }
 
+std::pair<Version, Version> TestDriverContext::getCommitVersionPair(const StorageTeamID& storageTeamId) {
+	ASSERT(storageTeamIDTLogGroupIDMapper.count(storageTeamId));
+	Version prevVersion = tLogGroupVersion[storageTeamIDTLogGroupIDMapper.at(storageTeamId)];
+	Version commitVersion = prevVersion + commitVersionGap;
+	tLogGroupVersion[storageTeamIDTLogGroupIDMapper.at(storageTeamId)] = commitVersion;
+	return { prevVersion, commitVersion };
+}
+
 void startFakeProxy(std::vector<Future<Void>>& actors, std::shared_ptr<TestDriverContext> pTestDriverContext) {
 	for (int i = 0; i < pTestDriverContext->numProxies; ++i) {
 		std::shared_ptr<FakeProxyContext> pFakeProxyContext(
-		    new FakeProxyContext{ pTestDriverContext->numCommits, pTestDriverContext });
+		    new FakeProxyContext{ i, pTestDriverContext->numCommits, pTestDriverContext });
 		actors.emplace_back(fakeProxy(pFakeProxyContext));
 	}
 }

@@ -46,6 +46,7 @@
 #include "fdbserver/WaitFailure.h"
 #include "fdbserver/WorkerInterface.actor.h"
 #include "fdbserver/ptxn/ProxyTLogPushMessageSerializer.h"
+#include "fdbserver/ptxn/TLogInterface.h"
 #include "flow/ActorCollection.h"
 #include "flow/IRandom.h"
 #include "flow/Knobs.h"
@@ -53,6 +54,7 @@
 #include "flow/Tracing.h"
 
 #include "flow/actorcompiler.h" // This must be the last #include.
+#include "flow/genericactors.actor.h"
 
 ACTOR Future<Void> broadcastTxnRequest(TxnStateRequest req, int sendAmount, bool sendReply) {
 	state ReplyPromise<Void> reply = req.reply;
@@ -1208,6 +1210,28 @@ ACTOR Future<Void> postResolution(CommitBatchContext* self) {
 	                                                          self->toCommit,
 	                                                          span.context,
 	                                                          self->debugID);
+
+	auto results = self->teamMessageBuilder.getAllSerialized();
+	std::vector<Future<ptxn::TLogCommitReply>> teamReplies;
+	for (const auto& [team, data] : results) {
+		if (team != ptxn::demoTeam) continue;
+
+		// TODO: Find demo team's tlog
+		std::shared_ptr<ptxn::TLogInterfaceBase> tli;
+
+		// TODO: find team's prevVersion
+		ptxn::TLogCommitRequest commitRequest(span.context,
+		                                      team,
+		                                      data.arena(),
+		                                      data,
+		                                      self->prevVersion,
+		                                      self->commitVersion,
+		                                      pProxyCommitData->committedVersion.get(),
+		                                      pProxyCommitData->minKnownCommittedVersion,
+		                                      self->debugID);
+		//teamReplies.push_back(tli->commit.getReply(commitRequest));
+	}
+	wait(waitForAll(teamReplies));
 
 	if (!self->forceRecovery) {
 		ASSERT(pProxyCommitData->latestLocalCommitBatchLogging.get() == self->localBatchNumber - 1);
