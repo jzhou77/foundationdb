@@ -55,6 +55,7 @@
 #include "flow/Trace.h"
 #include "flow/UnitTest.h"
 #include "flow/actorcompiler.h" // This must be the last #include.
+#include <utility>
 
 
 namespace ptxn {
@@ -1269,12 +1270,13 @@ bool tlogTerminated(Reference<TLogGroupData> self,
                     Error const& e) {
 	// Dispose the IKVS (destroying its data permanently) only if this shutdown is definitely permanent.  Otherwise just
 	// close it.
+
 	if (e.code() == error_code_worker_removed || e.code() == error_code_recruitment_failed) {
-		persistentData->dispose();
-		persistentQueue->dispose();
+		// persistentData->dispose();
+		// persistentQueue->dispose();
 	} else {
-		persistentData->close();
-		persistentQueue->close();
+		// persistentData->close();
+		// persistentQueue->close();
 	}
 
 	if (e.code() == error_code_worker_removed || e.code() == error_code_recruitment_failed ||
@@ -1346,10 +1348,13 @@ ACTOR Future<Void> tlogGroupStart(Reference<TLogGroupData> self, Reference<LogGe
 			throw logData->removed.getError();
 		}
 
+		// std::cout << "--> >tLogGroupStart: Before initPersistentState\n";
 		// Brand new tlog, initialization has already been done by caller
 		wait(initPersistentState(self, logData) || logData->removed);
+		// std::cout << "--> >tLogGroupStart: After initPersistentState\n";
 
 		if (logData->recoveryComplete.isSet()) {
+			// std::cout << "--> >tLogGroupStart: worker removed\n";
 			throw worker_removed();
 		}
 
@@ -1358,7 +1363,9 @@ ACTOR Future<Void> tlogGroupStart(Reference<TLogGroupData> self, Reference<LogGe
 
 		logData->recoveryComplete.send(Void());
 
+		// std::cout << "--> >tLogGroupStart: Before CommitQueue\n";
 		wait(logData->committingQueue.getFuture() || logData->removed);
+		// std::cout << "--> >tLogGroupStart: After CommitQueue\n";
 
 		TraceEvent("TLogGroupReady", logData->logId)
 		    .detail("GroupId", self->tlogGroupID)
@@ -1402,30 +1409,35 @@ ACTOR Future<Void> tLogStart(Reference<TLogServerData> self, InitializeTLogReque
 	state std::vector<Future<Void>> tlogGroupStarts;
 	state std::shared_ptr<std::unordered_map<StorageTeamID, Reference<LogGenerationData>>> activeGeneration =
 	    std::make_shared<std::unordered_map<StorageTeamID, Reference<LogGenerationData>>>();
+	int i = 2;
 	for (auto& group : req.tlogGroups) {
 		ASSERT(self->tlogGroups.count(group.logGroupId));
 		Reference<TLogGroupData> tlogGroupData = self->tlogGroups[group.logGroupId];
 		ASSERT(group.logGroupId == tlogGroupData->tlogGroupID);
+		std::unordered_map<StorageTeamID, std::vector<Tag>> storageTeams = { { UID(1, ++i), {} } };
 		Reference<LogGenerationData> newGenerationData = makeReference<LogGenerationData>(tlogGroupData,
 		                                                                                  recruited,
 		                                                                                  req.recruitmentID,
 		                                                                                  g_network->protocolVersion(),
 		                                                                                  req.spillType,
-		                                                                                  group.storageTeams,
+		                                                                                  storageTeams,
 		                                                                                  req.locality,
 		                                                                                  req.epoch,
 		                                                                                  "Recruited");
 
 		tlogGroupData->id_data[recruited.id()] = newGenerationData;
 		newGenerationData->removed = self->removed;
-		for (auto& storageTeam : group.storageTeams) {
+		for (auto& storageTeam : storageTeams) {
 			activeGeneration->emplace(storageTeam.first, newGenerationData);
 		}
 		tlogGroupStarts.push_back(tlogGroupStart(tlogGroupData, newGenerationData));
 	}
 
+	// std::cout << "---> tlogstart wait for tloggrouopstarts\n";
 	wait(waitForAll(tlogGroupStarts));
+	// std::cout << "---> tlogstart wait for tloggrouopstarts dnoe.\n";
 	req.ptxnReply.send(recruited);
+	// std::cout << "---> tlogstart wait sent interfacee\n";
 
 	TraceEvent("TLogStart", recruited.id());
 	wait(tLogCore(self, activeGeneration, recruited));
@@ -1451,6 +1463,7 @@ ACTOR Future<Void> tLog(std::vector<std::pair<IKeyValueStore*, IDiskQueue*>> per
 
 	TraceEvent("SharedTlog", tlogId);
 	ASSERT(!restoreFromDisk);
+	std::cout << "--> Started ptxn tLog" << std::endl;
 
 	try {
 		state Future<Void> activeSharedChange = Void();
@@ -1459,6 +1472,7 @@ ACTOR Future<Void> tLog(std::vector<std::pair<IKeyValueStore*, IDiskQueue*>> per
 		loop choose {
 			// TODO: restore old tlog groups from disk and build overlapping tlog groups from the restore
 			when(state InitializeTLogRequest req = waitNext(tlogRequests.getFuture())) {
+				// std::cout << "--> TLog ITLR" << std::endl;
 				if (!self->tlogCache.exists(req.recruitmentID)) {
 					self->tlogCache.set(req.recruitmentID, req.ptxnReply.getFuture());
 
@@ -1495,10 +1509,12 @@ ACTOR Future<Void> tLog(std::vector<std::pair<IKeyValueStore*, IDiskQueue*>> per
 						tlogGroupTerminated.push_back(tlogGroup->terminated.getFuture());
 					}
 
+					// std::cout << "--> tlog before choose\n";
 					choose {
 						when(wait(waitForAny(tlogGroupTerminated))) { throw tlog_stopped(); }
 						when(wait(waitForAll(tlogGroupRecoveries))) {}
 					}
+					// std::cout << "--> tlog after choose\n";
 
 					// start the new generation
 					self->sharedActors.send(tLogStart(self, req, locality));

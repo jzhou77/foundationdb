@@ -1019,6 +1019,7 @@ ACTOR Future<Void> workerServer(Reference<ClusterConnectionFile> connFile,
 	// here is no, so that when running with log_version==3, all files should say V=3.
 	state std::map<SharedLogsKey, SharedLogsValue> sharedLogs;
 	state Reference<AsyncVar<UID>> activeSharedTLog(new AsyncVar<UID>());
+	state Reference<AsyncVar<UID>> activeSharedTLog7(new AsyncVar<UID>());
 	state WorkerCache<InitializeBackupReply> backupWorkerCache;
 
 	state std::string coordFolder = abspath(_coordFolder);
@@ -1166,7 +1167,11 @@ ACTOR Future<Void> workerServer(Reference<ClusterConnectionFile> connFile,
 				Promise<Void> oldLog;
 				Promise<Void> recovery;
 				TLogFn tLogFn = tLogFnForOptions(s.tLogOptions);
+				// TLogFn tLogFn7 = tLogFnForOptions(TLogOptions(TLogVersion::V7, TLogSpillType::DEFAULT));
+
 				auto& logData = sharedLogs[SharedLogsKey(s.tLogOptions, s.storeType)];
+				// auto& logData7 =
+				//     sharedLogs[SharedLogsKey(TLogOptions(TLogVersion::V7, TLogSpillType::DEFAULT), req.storeType)];
 				// FIXME: Shouldn't if logData.first isValid && !isReady, shouldn't we
 				// be sending a fake InitializeTLogRequest rather than calling tLog() ?
 				Future<Void> tl =
@@ -1183,8 +1188,25 @@ ACTOR Future<Void> workerServer(Reference<ClusterConnectionFile> connFile,
 				           folder,
 				           degraded,
 				           activeSharedTLog);
+				std::cout << "TLog Recovery won't start TLog::V7\n";
+				// Future<Void> tl7 = tLogFn7(std::vector<std::pair<IKeyValueStore*, IDiskQueue*>>(),
+				//                            dbInfo,
+				//                            locality,
+				//                            !logData7.actor.isValid() || logData7.actor.isReady()
+				//                                ? logData7.requests
+				//                                : PromiseStream<InitializeTLogRequest>(),
+				//                            s.storeID,
+				//                            interf.id(),
+				//                            true,
+				//                            oldLog,
+				//                            recovery,
+				//                            folder,
+				//                            degraded,
+				//                            activeSharedTLog7);
+
 				recoveries.push_back(recovery.getFuture());
 				activeSharedTLog->set(s.storeID);
+				// activeSharedTLog7->set(s.storeID);
 
 				tl = handleIOErrors(tl, kv, s.storeID);
 				tl = handleIOErrors(tl, queue, s.storeID);
@@ -1436,8 +1458,12 @@ ACTOR Future<Void> workerServer(Reference<ClusterConnectionFile> connFile,
 				}
 				TLogOptions tLogOptions(req.logVersion, req.spillType);
 				TLogFn tLogFn = tLogFnForOptions(tLogOptions);
+				TLogFn tLogFn7 = tLogFnForOptions(TLogOptions(TLogVersion::V7, TLogSpillType::DEFAULT));
 				auto& logData = sharedLogs[SharedLogsKey(tLogOptions, req.storeType)];
+				auto& logData7 =
+				    sharedLogs[SharedLogsKey(TLogOptions(TLogVersion::V7, TLogSpillType::DEFAULT), req.storeType)];
 				logData.requests.send(req);
+				logData7.requests.send(req);
 				if (!logData.actor.isValid() || logData.actor.isReady()) {
 					UID logId = deterministicRandom()->randomUniqueID();
 					std::map<std::string, std::string> details;
@@ -1485,7 +1511,29 @@ ACTOR Future<Void> workerServer(Reference<ClusterConnectionFile> connFile,
 					logData.actor = tLogCore;
 					logData.uid = logId;
 				}
+				if ((!logData7.actor.isValid() || logData7.actor.isReady()) && req.isPrimary &&
+				    req.locality != tagLocalitySatellite) {
+					UID logId7 = deterministicRandom()->randomUniqueID();
+					Future<Void> tLogCore7 = tLogFn7(std::vector<std::pair<IKeyValueStore*, IDiskQueue*>>(),
+					                                 dbInfo,
+					                                 locality,
+					                                 logData7.requests,
+					                                 logId7,
+					                                 interf.id(),
+					                                 false,
+					                                 Promise<Void>(),
+					                                 Promise<Void>(),
+					                                 folder,
+					                                 degraded,
+					                                 activeSharedTLog7);
+					// tLogCore7 = handleIOErrors(tLogCore7, data, logId7);
+					// tLogCore7 = handleIOErrors(tLogCore7, queue, logId7);
+					errorForwarders.add(forwardError(errors, Role::SHARED_TRANSACTION_LOG, logId7, tLogCore7));
+					logData7.actor = tLogCore7;
+					logData7.uid = logId7;
+				}
 				activeSharedTLog->set(logData.uid);
+				activeSharedTLog7->set(logData7.uid);
 			}
 			when(InitializeStorageRequest req = waitNext(interf.storage.getFuture())) {
 				if (!storageCache.exists(req.reqId)) {
