@@ -976,8 +976,6 @@ ACTOR Future<Void> tLogPeekMessages(TLogPeekRequest req,
 			const Version& version = std::get<Version>(tuple);
 			const StringRef& messages = std::get<StringRef>(tuple);
 			const Arena& arena = std::get<Arena>(tuple);
-			// Skip empty version message
-			if (messages.size() == 0) continue;
 
 			if (version < req.beginVersion) {
 				continue;
@@ -991,6 +989,11 @@ ACTOR Future<Void> tLogPeekMessages(TLogPeekRequest req,
 			reply.end = version;
 
 			serializer.startVersionWriting(version);
+			// Skip empty version message
+			if (messages.size() == 0) {
+				serializer.completeVersionWriting();
+				continue;
+			}
 
 			// TODO: instead of deserializing, just sends it out
 			ProxyTLogMessageHeader header;
@@ -1168,10 +1171,10 @@ ACTOR Future<Void> serveTLogInterface_PassivelyPull(
 			}
 		}
 		when(TLogPeekRequest req = waitNext(tli.peekMessages.getFuture())) {
-			// TraceEvent("TLogPeekReq")
-			//    .detail("BeginVersion", req.beginVersion)
-			//    .detail("StorageTeam", req.storageTeamID)
-			//    .detail("Tag", req.tag.toString());
+			TraceEvent("TLogPeekReq")
+			    .detail("BeginVersion", req.beginVersion)
+			    .detail("StorageTeam", req.storageTeamID)
+			    .detail("Tag", req.tag.toString());
 			auto tlogGroup = activeGeneration->find(req.storageTeamID);
 			TEST(tlogGroup == activeGeneration->end()); // TLog peek: group not found
 			if (tlogGroup == activeGeneration->end()) {
