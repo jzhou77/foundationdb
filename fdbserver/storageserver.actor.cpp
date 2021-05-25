@@ -42,7 +42,6 @@
 #include "fdbclient/Notified.h"
 #include "fdbclient/StatusClient.h"
 #include "fdbclient/SystemData.h"
-#include "fdbclient/TransactionLineage.h"
 #include "fdbclient/VersionedMap.h"
 #include "fdbserver/FDBExecHelper.actor.h"
 #include "fdbserver/IKeyValueStore.h"
@@ -545,6 +544,8 @@ public:
 	int64_t versionLag; // An estimate for how many versions it takes for the data to move from the logs to this storage
 	                    // server
 
+	Optional<UID> sourceTLogID; // the tLog from which the latest batch of versions were fetched
+
 	ProtocolVersion logProtocol;
 
 	Reference<ILogSystem> logSystem;
@@ -678,6 +679,8 @@ public:
 		Counter loops;
 		Counter fetchWaitingMS, fetchWaitingCount, fetchExecutingMS, fetchExecutingCount;
 		Counter readsRejected;
+		Counter fetchedVersions;
+		Counter fetchesFromLogs;
 
 		LatencySample readLatencySample;
 		LatencyBands readLatencyBands;
@@ -695,10 +698,11 @@ public:
 		    updateBatches("UpdateBatches", cc), updateVersions("UpdateVersions", cc), loops("Loops", cc),
 		    fetchWaitingMS("FetchWaitingMS", cc), fetchWaitingCount("FetchWaitingCount", cc),
 		    fetchExecutingMS("FetchExecutingMS", cc), fetchExecutingCount("FetchExecutingCount", cc),
-		    readsRejected("ReadsRejected", cc), readLatencySample("ReadLatencyMetrics",
-		                                                          self->thisServerID,
-		                                                          SERVER_KNOBS->LATENCY_METRICS_LOGGING_INTERVAL,
-		                                                          SERVER_KNOBS->LATENCY_SAMPLE_SIZE),
+		    readsRejected("ReadsRejected", cc), fetchedVersions("FetchedVersions", cc),
+		    fetchesFromLogs("FetchesFromLogs", cc), readLatencySample("ReadLatencyMetrics",
+                                                                      self->thisServerID,
+                                                                      SERVER_KNOBS->LATENCY_METRICS_LOGGING_INTERVAL,
+                                                                      SERVER_KNOBS->LATENCY_SAMPLE_SIZE),
 		    readLatencyBands("ReadLatencyBands", self->thisServerID, SERVER_KNOBS->STORAGE_LOGGING_DELAY) {
 			specialCounter(cc, "LastTLogVersion", [self]() { return self->lastTLogVersion; });
 			specialCounter(cc, "Version", [self]() { return self->version.get(); });
@@ -1105,7 +1109,6 @@ ACTOR Future<Void> getValueQ(StorageServer* data, GetValueRequest req) {
 	state int64_t resultSize = 0;
 	Span span("SS:getValue"_loc, { req.spanContext });
 	span.addTag("key"_sr, req.key);
-	currentLineage->modify(&TransactionLineage::txID) = req.spanContext.first();
 
 	try {
 		++data->counters.getValueQueries;
@@ -1802,7 +1805,6 @@ ACTOR Future<Void> getKeyValuesQ(StorageServer* data, GetKeyValuesRequest req)
 {
 	state Span span("SS:getKeyValues"_loc, { req.spanContext });
 	state int64_t resultSize = 0;
-	currentLineage->modify(&TransactionLineage::txID) = req.spanContext.first();
 
 	++data->counters.getRangeQueries;
 	++data->counters.allQueries;
@@ -1963,7 +1965,6 @@ ACTOR Future<Void> getKeyValuesQ(StorageServer* data, GetKeyValuesRequest req)
 ACTOR Future<Void> getKeyQ(StorageServer* data, GetKeyRequest req) {
 	state Span span("SS:getKey"_loc, { req.spanContext });
 	state int64_t resultSize = 0;
-	currentLineage->modify(&TransactionLineage::txID) = req.spanContext.first();
 
 	++data->counters.getKeyQueries;
 	++data->counters.allQueries;
@@ -3523,9 +3524,22 @@ ACTOR Future<Void> update(StorageServer* data, bool* pReceivedUpdate) {
 			if (data->otherError.getFuture().isReady())
 				data->otherError.getFuture().get();
 
+			data->counters.fetchedVersions += (ver - data->version.get());
+			++data->counters.fetchesFromLogs;
+			Optional<UID> curSourceTLogID = cursor->getCurrentPeekLocation();
+
+			if (curSourceTLogID != data->sourceTLogID) {
+				data->sourceTLogID = curSourceTLogID;
+
+				TraceEvent("StorageServerSourceTLogID", data->thisServerID)
+					.detail("SourceTLogID", data->sourceTLogID.present() ? data->sourceTLogID.get().toString() : "unknown")
+					.trackLatest(data->thisServerID.toString() + "/StorageServerSourceTLogID");
+			}
+
 			data->noRecentUpdates.set(false);
 			data->lastUpdate = now();
 			data->version.set(ver); // Triggers replies to waiting gets for new version(s)
+
 			setDataVersion(data->thisServerID, data->version.get());
 			if (data->otherError.getFuture().isReady())
 				data->otherError.getFuture().get();
@@ -4337,7 +4351,6 @@ ACTOR Future<Void> checkBehind(StorageServer* self) {
 }
 
 ACTOR Future<Void> serveGetValueRequests(StorageServer* self, FutureStream<GetValueRequest> getValue) {
-	currentLineage->modify(&TransactionLineage::operation) = TransactionLineage::Operation::GetValue;
 	loop {
 		GetValueRequest req = waitNext(getValue);
 		// Warning: This code is executed at extremely high priority (TaskPriority::LoadBalancedEndpoint), so downgrade
@@ -4355,7 +4368,6 @@ ACTOR Future<Void> serveGetValueRequests(StorageServer* self, FutureStream<GetVa
 }
 
 ACTOR Future<Void> serveGetKeyValuesRequests(StorageServer* self, FutureStream<GetKeyValuesRequest> getKeyValues) {
-	currentLineage->modify(&TransactionLineage::operation) = TransactionLineage::Operation::GetKeyValues;
 	loop {
 		GetKeyValuesRequest req = waitNext(getKeyValues);
 		// Warning: This code is executed at extremely high priority (TaskPriority::LoadBalancedEndpoint), so downgrade
@@ -4365,7 +4377,6 @@ ACTOR Future<Void> serveGetKeyValuesRequests(StorageServer* self, FutureStream<G
 }
 
 ACTOR Future<Void> serveGetKeyRequests(StorageServer* self, FutureStream<GetKeyRequest> getKey) {
-	currentLineage->modify(&TransactionLineage::operation) = TransactionLineage::Operation::GetKey;
 	loop {
 		GetKeyRequest req = waitNext(getKey);
 		// Warning: This code is executed at extremely high priority (TaskPriority::LoadBalancedEndpoint), so downgrade
@@ -4378,7 +4389,6 @@ ACTOR Future<Void> watchValueWaitForVersion(StorageServer* self,
                                             WatchValueRequest req,
                                             PromiseStream<WatchValueRequest> stream) {
 	state Span span("SS:watchValueWaitForVersion"_loc, { req.spanContext });
-	currentLineage->modify(&TransactionLineage::txID) = req.spanContext.first();
 	try {
 		wait(success(waitForVersionNoTooOld(self, req.version)));
 		stream.send(req);
@@ -4392,11 +4402,9 @@ ACTOR Future<Void> watchValueWaitForVersion(StorageServer* self,
 
 ACTOR Future<Void> serveWatchValueRequestsImpl(StorageServer* self, FutureStream<WatchValueRequest> stream) {
 	loop {
-		currentLineage->modify(&TransactionLineage::txID) = 0;
 		state WatchValueRequest req = waitNext(stream);
 		state Reference<ServerWatchMetadata> metadata = self->getWatchMetadata(req.key.contents());
 		state Span span("SS:serveWatchValueRequestsImpl"_loc, { req.spanContext });
-		currentLineage->modify(&TransactionLineage::txID) = req.spanContext.first();
 
 		if (!metadata.isValid()) { // case 1: no watch set for the current key
 			metadata = makeReference<ServerWatchMetadata>(req.key, req.value, req.version, req.tags, req.debugID);
@@ -4470,7 +4478,6 @@ ACTOR Future<Void> serveWatchValueRequestsImpl(StorageServer* self, FutureStream
 
 ACTOR Future<Void> serveWatchValueRequests(StorageServer* self, FutureStream<WatchValueRequest> watchValue) {
 	state PromiseStream<WatchValueRequest> stream;
-	currentLineage->modify(&TransactionLineage::operation) = TransactionLineage::Operation::WatchValue;
 	self->actors.add(serveWatchValueRequestsImpl(self, stream.getFuture()));
 
 	loop {

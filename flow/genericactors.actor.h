@@ -697,16 +697,6 @@ private:
 	AsyncVar<Void> v;
 };
 
-// Binds an AsyncTrigger object to an AsyncVar, so when the AsyncVar changes
-// the AsyncTrigger is triggered.
-ACTOR template <class T>
-void forward(Reference<AsyncVar<T>> from, AsyncTrigger* to) {
-	loop {
-		wait(from->onChange());
-		to->trigger();
-	}
-}
-
 class Debouncer : NonCopyable {
 public:
 	explicit Debouncer(double delay) { worker = debounceWorker(this, delay); }
@@ -1344,6 +1334,14 @@ struct FlowLock : NonCopyable, public ReferenceCounted<FlowLock> {
 	int64_t activePermits() const { return active; }
 	int waiters() const { return takers.size(); }
 
+	// Try to send error to all current and future waiters
+	// Only works if broken_on_destruct.canBeSet()
+	void kill(Error e = broken_promise()) {
+		if (broken_on_destruct.canBeSet()) {
+			broken_on_destruct.sendError(e);
+		}
+	}
+
 private:
 	std::list<std::pair<Promise<Void>, int64_t>> takers;
 	const int64_t permits;
@@ -1556,10 +1554,6 @@ struct YieldedFutureActor : SAV<Void>, ActorCallback<YieldedFutureActor, 1, Void
 	}
 
 	void destroy() override { delete this; }
-
-	Reference<ActorLineage> setLineage() {
-		return currentLineage;
-	}
 
 	void a_callback_fire(ActorCallback<YieldedFutureActor, 1, Void>*, Void) {
 		if (int16_t(in_error_state.code()) == UNSET_ERROR_CODE) {
