@@ -1,16 +1,24 @@
-## Flow Tutorial: How Things Do Not Work
+# Flow Tutorial: How Things Do Not Work
+
+## Topics
 
 * Single threaded
+* ACTOR model and actor life cycle
+
 * Calling ACTOR function creates an object and does NOT block.
-  * Hold the returned Future object, otherwise the actor is cancelled.
-  Good pattern: Add a future variable to an actor collection and wait on it, otherwise if an exception is thrown from the actor, the exception is silently ignored (not raised to the caller function!). E.g., masterServer().
+  * Hold the returned Future object.
+
+* ACTOR chaining and exceptions
+  * wait() and exceptions
 
 * All parameters are const &
-  * Shadowing argument, e.g., std::vector<Future<Void>>, iterator
+  * Shadowing argument
   * state X x(params) results in no matching function for call to 'X::X()' error.
 
 * Reduce state variables
-* broken promise. RPC server side, the ReplyPromise is destroyed before replying back.
+* broken promise
+
+## Probably not covered
 
 * Very rare: uncancellable ACTOR: `grep ACTOR */*.actor.cpp | grep void`.
 * static ACTOR member function
