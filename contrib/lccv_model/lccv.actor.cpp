@@ -42,6 +42,7 @@ struct WriteRequest {
 int WriteRequest::count = 0;
 
 struct SharedState {
+	// Sequencer's most recent commit version that has been given out.
 	Version writeVersion = 0;
 
 	// Most recent committed version
@@ -53,21 +54,28 @@ struct SharedState {
 	double stopAfter = 1000;
 	PromiseStream<Future<Void>> addActor;
 	Reference<Histogram> wh;
+	Reference<Histogram> rh;
 
 	// Exponential distribution's lambda
 	double writeArrival;
 	double writeDuration;
+	double readArrival;
 
 	std::default_random_engine generator;
 	std::exponential_distribution<double> dWriteDuration;
 	std::exponential_distribution<double> dWriteArrival;
+	std::exponential_distribution<double> dReadArrival;
 
-	SharedState(double wArrival, double wDuration)
-	  : startTime(g_network->now()), wh(Histogram::getHistogram("lccv"_sr, "times"_sr, Histogram::Unit::microseconds)),
-	    writeArrival(wArrival), writeDuration(wDuration), generator(141), dWriteDuration(wDuration),
-	    dWriteArrival(wArrival) {
-		std::cout << format(
-		                 "Start at: %.2f, write arrival %f, write duration %f ", startTime, writeArrival, writeDuration)
+	SharedState(double wArrival, double wDuration, double rArrival)
+	  : startTime(g_network->now()), wh(Histogram::getHistogram("lccv"_sr, "writes"_sr, Histogram::Unit::microseconds)),
+	    rh(Histogram::getHistogram("lccv"_sr, "reads"_sr, Histogram::Unit::microseconds)), writeArrival(wArrival),
+	    writeDuration(wDuration), readArrival(rArrival), generator(141), dWriteDuration(wDuration),
+	    dWriteArrival(wArrival), dReadArrival(rArrival) {
+		std::cout << format("Start at: %.2f, write arrival %f, write duration %f, read arrival %f",
+		                    startTime,
+		                    writeArrival,
+		                    writeDuration,
+		                    readArrival)
 		          << "\n";
 	}
 
@@ -99,6 +107,32 @@ struct SharedState {
 	void addWriteRequest(const WriteRequest& req) {
 		writes++;
 		addActor.send(updateVersion(req));
+	}
+
+	ACTOR static Future<Void> read_impl(SharedState* self) {
+		state Version rv = self->currentVersion.get();
+		state Version recentCV = self->writeVersion;
+		state double startTime = g_network->now();
+
+		if (rv == recentCV) {
+			// adds to stats
+			self->rh->sampleSeconds(0.02); // assume 2ms read latency
+		} else {
+			// Delay to read most recent commit, which is not exactly
+			// what I want to measure.
+			wait(self->currentVersion.whenAtLeast(recentCV));
+			double duration = g_network->now() - startTime;
+			self->rh->sampleSeconds(duration);
+		}
+		return Void();
+	}
+
+	Future<Void> read() {
+		return read_impl(this);
+	}
+
+	void addReadRequest() {
+		addActor.send(read());
 	}
 
 	// Returns (previous commit version, commit version) pair
@@ -149,8 +183,10 @@ ACTOR Future<Void> writes(std::shared_ptr<SharedState> stats) {
 
 ACTOR Future<Void> reads(std::shared_ptr<SharedState> stats) {
 	loop {
-		wait(delay(0.3));
+		double arrivalDelay = stats->dReadArrival(stats->generator);
+		wait(delay(arrivalDelay));
 
+		stats->addReadRequest();
 
 		if (g_network->now() - stats->startTime >= stats->stopAfter) {
 			break;
@@ -172,6 +208,7 @@ ACTOR Future<Void> actors(std::shared_ptr<SharedState> stats) {
 
 int main(int argc, char** argv) {
 	double writeArrival = 100, writeDuration = 100;
+	double readArrival = 1000;
 	for (int i = 1; i < argc; i++) {
 		std::string arg(argv[i]);
 		if (arg == "--write-arrival") {
@@ -186,6 +223,12 @@ int main(int argc, char** argv) {
 				return 1;
 			}
 			writeDuration = atof(argv[++i]);
+		} else if (arg == "--read-arrival") {
+			if (i + 1 >= argc) {
+				std::cout << "Expecting an argument after --read-arrival\n";
+				return 1;
+			}
+			readArrival = atof(argv[++i]);
 		} else {
 			std::cerr << "Unknown argument: " << arg << "\n";
 			return 1;
@@ -197,7 +240,7 @@ int main(int argc, char** argv) {
 	startNewSimulator();
 	openTraceFile(NetworkAddress(), 1e7, 1e9, ".", "trace", "lccv");
 
-	std::shared_ptr<SharedState> stats = std::make_shared<SharedState>(writeArrival, writeDuration);
+	std::shared_ptr<SharedState> stats = std::make_shared<SharedState>(writeArrival, writeDuration, readArrival);
 
 	// now we start the actors
 	std::vector<Future<Void>> all;
