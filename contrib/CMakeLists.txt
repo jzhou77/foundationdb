@@ -1,4 +1,5 @@
 if(NOT WIN32)
+  add_subdirectory(lccv_model)
   add_subdirectory(monitoring)
   add_subdirectory(TraceLogHelper)
   add_subdirectory(TestHarness)
