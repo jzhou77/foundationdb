@@ -113,17 +113,14 @@ struct SharedState {
 		state Version rv = self->currentVersion.get();
 		state Version recentCV = self->writeVersion;
 		state double startTime = g_network->now();
-
-		if (rv == recentCV) {
-			// adds to stats
-			self->rh->sampleSeconds(0.02); // assume 2ms read latency
-		} else {
+		state double duration = 0.02; // assume 2ms minimal read latency
+		if (rv != recentCV) {
 			// Delay to read most recent commit, which is not exactly
 			// what I want to measure.
 			wait(self->currentVersion.whenAtLeast(recentCV));
-			double duration = g_network->now() - startTime;
-			self->rh->sampleSeconds(duration);
+			duration = std::min(duration, g_network->now() - startTime);
 		}
+		self->rh->sampleSeconds(duration);
 		return Void();
 	}
 
