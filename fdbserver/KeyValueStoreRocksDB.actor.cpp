@@ -2846,6 +2846,9 @@ public:
 				std::string str =
 				    deterministicRandom()->randomAlphaNumeric(deterministicRandom()->randomInt(10000, 50000));
 				self->kvStore->set({ key, str });
+				if (v == 841000000) {
+					TraceEvent("InsertingData").detail("Key", printable(key)).detail("Value", printable(str));
+				}
 			}
 
 			wait(self->kvStore->commit(false) && delayJittered(0.001));
@@ -3023,6 +3026,7 @@ TEST_CASE("noSim/RocksDB/BackupWorkload") {
 	try {
 		state MiniBackupWorkload workload(kvStore);
 		workload.run();
+		// wait(Never());
 		wait(delay(10.0 * deterministicRandom()->random01()));
 		workload.stop();
 	} catch (Error& e) {
@@ -3034,6 +3038,34 @@ TEST_CASE("noSim/RocksDB/BackupWorkload") {
 	wait(closed);
 	return Void();
 }
+
+TEST_CASE("noSim/RocksDB/BackupRead") {
+	state const std::string rocksDBTestDir = "rocksdb-perf-db";
+
+	state IKeyValueStore* kvStore = new RocksDBKeyValueStore(rocksDBTestDir, deterministicRandom()->randomUniqueID());
+	wait(kvStore->init());
+
+	state KeyRange range = KeyRangeRef( //"\xff\x02/blog/om\xad\x44\xdc\x2e\x8e\x30\x05\x97"_sr,
+	                                    //"\xff\x02/blog/om\xad\x44\xdc\x2e\x8e\x30\x05\x98"_sr);
+	    "\xff\x02/blog/om\xad\x44\xdc\x2e\x8e\x30\x05\x97^#\x86\x08\x81\x63\xe9\x00\x00\x00\x00\x32\x20\xa4\x40"_sr,
+	    "\xff\x02/blog/om\xad\x44\xdc\x2e\x8e\x30\x05\x97^#\x86\x08\x81\x63\xe9\x00\x00\x00\x00\x32\x20\xa4\x41"_sr);
+	// \xff\x02/blog/om\xadD\xdc.\x8e0\x05\x97^#\x86\x08\x81c\xe9\x00\x00\x00\x002 \xa4@
+	// \xff\x02/blog/om\xadD\xdc.\x8e0\x05\x97^#\x86\x08\x81c\xe9\x00\x00\x00\x002 \xa4A
+	// \xff\x02/blog/om\xadD\xdc.\x8e0\x05\x97^#\x86\x08\x81c\x80\x00\x00\x00\x002 \xa4@\x06\x00\x00\x00
+	// \xff\x02/blog/ + [uid 8B] + [hash 1B] + [version 8B] + [part 4B]
+	// hash = bigEndian64(vblock's lower 32 bits)
+	RangeResult result = wait(kvStore->readRange(range));
+	TraceEvent("ReadRange").detail("Range", range).detail("ResultSize", result.size());
+	for (int i = 0; i < result.size(); i++) {
+		TraceEvent("ReadRange").detail("Key", result[i].key).detail("Value", result[i].value);
+	}
+	TraceEvent("TestFinished");
+	Future<Void> closed = kvStore->onClosed();
+	kvStore->dispose();
+	wait(closed);
+	return Void();
+}
+
 } // namespace
 
 #endif // SSD_ROCKSDB_EXPERIMENTAL
