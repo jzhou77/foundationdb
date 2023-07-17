@@ -2851,10 +2851,11 @@ public:
 				}
 			}
 
-			wait(self->kvStore->commit(false) && delayJittered(0.001));
+			wait(self->kvStore->commit(false));
 			self->keyCount[v] = parts;
 			// fmt::print("inserted {} keys at version {}\n", parts, v);
 			TraceEvent("InsertedData").detail("Version", v).detail("Count", parts);
+			wait(delayJittered(0.001));
 
 			// increase version by 100~200k
 			v += deterministicRandom()->randomInt64(100000, 200000);
