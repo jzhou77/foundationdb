@@ -2789,6 +2789,44 @@ TEST_CASE("noSim/RocksDB/RangeClear") {
 	return Void();
 }
 
+TEST_CASE("noSim/RocksDB/RangeClear2") {
+	state const std::string rocksDBTestDir = "rocksdb-perf-db";
+	platform::eraseDirectoryRecursive(rocksDBTestDir);
+
+	state IKeyValueStore* kvStore = new RocksDBKeyValueStore(rocksDBTestDir, deterministicRandom()->randomUniqueID());
+	wait(kvStore->init());
+
+	state KeyRef shardPrefix = "\xffprefix/"_sr;
+	state KeyRef shardPrefix2 = "\xffprefix0"_sr;
+
+	state int i = 0;
+	state int count = 0;
+	state Future<Void> f1;
+	state Future<Void> f2;
+	for (count = 0; count < 1000; ++count) {
+		int n = deterministicRandom()->randomInt(1, 100);
+		for (; i < n; ++i) {
+			state std::string key1 = format("\xffprefix/%d", i);
+			state std::string key2 = format("\xffprefix/%d", i + 1);
+
+			kvStore->set({ key2, std::to_string(i) });
+		}
+		f1 = kvStore->commit(false);
+		kvStore->clear({ KeyRangeRef(shardPrefix, shardPrefix2) });
+		f2 = kvStore->commit(false);
+		wait(f1 && f2);
+		RangeResult result = wait(kvStore->readRange(KeyRangeRef(shardPrefix, shardPrefix2), 10000, 10000));
+		ASSERT(result.size() == 0);
+		printf("%d\n", count);
+	}
+
+	// TODO: flush memtable. The process is expected to OOM.
+	Future<Void> closed = kvStore->onClosed();
+	kvStore->dispose();
+	wait(closed);
+	return Void();
+}
+
 class MiniBackupWorkload {
 public:
 	MiniBackupWorkload() = default;
