@@ -23,6 +23,9 @@ testTitle=WriteDuringReadTest
     reboot=true
     testDuration=60.0
 
+    testName=Status
+    testDuration=30.0
+
     testName=Attrition
     machinesToKill=10
     machinesToLeave=3

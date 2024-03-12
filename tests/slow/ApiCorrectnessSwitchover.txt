@@ -25,3 +25,6 @@ testName=AtomicSwitchover
 clearAfterTest=false
 simBackupAgents=BackupToDB
 extraDB=2
+
+testName=Status
+testDuration=30.0
