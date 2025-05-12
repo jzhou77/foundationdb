@@ -47,16 +47,16 @@ TokenRange Token::getMatchingRangeIn(const TokenRange& range) const {
 	int dir = 0;
 	if (value == "(") {
 		pred = [&](const Token& t) -> bool { return t.value != ")" || t.parenDepth != parenDepth; };
-		dir += 1;
+		dir = 1;
 	} else if (value == ")") {
 		pred = [&](const Token& t) -> bool { return t.value != "(" || t.parenDepth != parenDepth; };
-		dir -= 1;
+		dir = -1;
 	} else if (value == "{") {
 		pred = [&](const Token& t) -> bool { return t.value != "}" || t.braceDepth != braceDepth; };
-		dir += 1;
+		dir = 1;
 	} else if (value == "}") {
 		pred = [&](const Token& t) -> bool { return t.value != "{" || t.braceDepth != braceDepth; };
-		dir -= 1;
+		dir = -1;
 	} else if (value == "<") {
 		return TokenRange(
 		    range.getAllTokens(),
@@ -949,13 +949,10 @@ void ActorParser::countParens() {
 	for (int i = 0; i < tokens.size(); i++) {
 		if (tokens[i].value == "}") {
 			braceDepth--;
-			break;
-		} else if (tokens[i].value == "{") {
+		} else if (tokens[i].value == ")") {
 			parenDepth--;
-			break;
 		} else if (tokens[i].value == "\r\n" || tokens[i].value == "\n") {
 			lineCount++;
-			break;
 		}
 		if (braceDepth < 0)
 			throw Error(lineCount, "Mismatched braces");
@@ -976,7 +973,6 @@ void ActorParser::countParens() {
 			parenDepth++;
 			if (parenDepth == 1)
 				lastParen = tokens[i];
-			break;
 		}
 	}
 	if (braceDepth != 0)
@@ -988,6 +984,7 @@ void ActorParser::countParens() {
 std::vector<Token> ActorParser::tokenize(const std::string& text) {
 	std::vector<Token> result;
 	int pos = 0;
+	int i = 0;
 	while (pos < text.length()) {
 		bool ok = false;
 		for (const auto& re : tokenExpressions) {
@@ -996,10 +993,9 @@ std::vector<Token> ActorParser::tokenize(const std::string& text) {
 			std::string::const_iterator end = text.end();
 
 			// Boost regex can match from a specific position in the string
-			int i = 0;
 			if (boost::regex_search(start, end, match, re, boost::match_continuous)) {
 				std::string token(match[0].first, match[0].second);
-				std::cout << "Token " << i++ << " : " << token << "\n";
+				std::cout << "Token " << i++ << ", pos " << pos << " : " << token << "\n";
 				result.emplace_back(token);
 				pos += match.length();
 				ok = true;

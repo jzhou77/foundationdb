@@ -83,7 +83,9 @@ public:
 	    endIsUnreachable(r.endIsUnreachable), exceptionParameterIs(r.exceptionParameterIs), publicName(r.publicName),
 	    specifiers(r.specifiers), indentation(r.indentation), wasCalled(r.wasCalled) {
 		// body is not copied
-		overload = std::make_unique<Function>(*r.overload);
+		if (r.overload != nullptr) {
+			overload = std::make_unique<Function>(*r.overload);
+		}
 	}
 
 	Function& operator=(const Function& r) {
@@ -97,7 +99,11 @@ public:
 			specifiers = r.specifiers;
 			indentation = r.indentation;
 			wasCalled = r.wasCalled;
-			overload = std::make_unique<Function>(*r.overload);
+			if (r.overload != nullptr) {
+				overload = std::make_unique<Function>(*r.overload);
+			} else {
+				overload.reset();
+			}
 		}
 		return *this;
 	}
@@ -110,7 +116,10 @@ public:
 
 	bool getWasCalled() const { return wasCalled; }
 
-	void setOverload(const Function& overload) { *this->overload = overload; }
+	void setOverload(const Function& overload) {
+		auto copy = std::make_unique<Function>(overload);
+		this->overload = std::move(copy);
+	}
 
 	Function* popOverload() {
 		Function* result = this->overload.get();
@@ -328,28 +337,24 @@ public:
 	~ActorCompiler() {}
 
 	// Code generation methods
-	void CompileStatement(const std::shared_ptr<PlainOldCodeStatement> stmt, Context& cx);
-	void CompileStatement(const std::shared_ptr<StateDeclarationStatement> stmt, Context& cx);
-	void CompileStatement(const std::shared_ptr<ForStatement> stmt, Context& cx);
-	void CompileStatement(const std::shared_ptr<LoopStatement> stmt, Context& cx);
-	void CompileStatement(const std::shared_ptr<WhileStatement> stmt, Context& cx);
-	void CompileStatement(const std::shared_ptr<RangeForStatement> stmt, Context& cx);
+	void CompilePlainStatement(const std::shared_ptr<PlainOldCodeStatement> stmt, Context& cx);
+	void CompileStateDeclStatement(const std::shared_ptr<StateDeclarationStatement> stmt, Context& cx);
+	void CompileForStatement(const std::shared_ptr<ForStatement> stmt, Context& cx);
+	void CompileLoopStatement(const std::shared_ptr<LoopStatement> stmt, Context& cx);
+	void CompileChooseStatement(const std::shared_ptr<ChooseStatement> stmt, Context& cx);
+	void CompileWhenStatement(const std::shared_ptr<ChooseStatement> stmt, Context& cx);
+	void CompileWhileStatement(const std::shared_ptr<WhileStatement> stmt, Context& cx);
+	void CompileRangeForStatement(const std::shared_ptr<RangeForStatement> stmt, Context& cx);
+	void CompileBreakStatement(const std::shared_ptr<BreakStatement>& stmt, Context& cx);
+	void CompileContinueStatement(const std::shared_ptr<ContinueStatement>& stmt, Context& cx);
+	void CompileWaitStatement(const std::shared_ptr<WaitStatement>& stmt, Context& cx);
+	void CompileCodeBlockStatement(const std::shared_ptr<CodeBlock>& stmt, Context& cx);
+	void CompileReturnStatement(const std::shared_ptr<ReturnStatement>& stmt, Context& cx);
+	void CompileIfStatement(const std::shared_ptr<IfStatement>& stmt, Context& cx);
+	void CompileTryStatement(const std::shared_ptr<TryStatement>& stmt, Context& cx);
+	void CompileThrowStatement(const std::shared_ptr<ThrowStatement>& stmt, Context& cx);
 
-	void CompileStatement(Statement& stmt, Context& cx);
-	void CompileLoopStatement(LoopStatement& stmt, Context& cx);
-	void CompileWhileStatement(WhileStatement& stmt, Context& cx);
-	Context CompileCodeBlock(CodeBlock& block, Context context, bool okToContinue = true);
-
-	void CompileStatement(const std::shared_ptr<BreakStatement>& stmt, Context& cx);
-	void CompileStatement(const std::shared_ptr<ContinueStatement>& stmt, Context& cx);
-	void CompileStatement(const std::shared_ptr<WaitStatement>& stmt, Context& cx);
-	void CompileStatement(const std::shared_ptr<CodeBlock>& stmt, Context& cx);
-	void CompileStatement(const std::shared_ptr<ReturnStatement>& stmt, Context& cx);
-	void CompileStatement(const std::shared_ptr<IfStatement>& stmt, Context& cx);
-	void CompileStatement(const std::shared_ptr<TryStatement>& stmt, Context& cx);
-	void CompileStatement(const std::shared_ptr<ThrowStatement>& stmt, Context& cx);
-
-	void CompileStatement(const std::shared_ptr<Statement>& stmt, const Context& cx);
+	void CompileStatement(const std::shared_ptr<Statement>& stmt, Context& cx);
 
 	// Compile returns a new context based on the one that is passed in, but (unlike CompileStatement)
 	//   does not modify its parameter
@@ -387,12 +392,12 @@ public:
 	bool WillContinue(std::shared_ptr<Statement> stmt);
 	std::shared_ptr<CodeBlock> AsCodeBlock(std::shared_ptr<Statement> stmt);
 
-	static void TryCatch(Context& cx,
+	static void TryCatch(Context cx,
 	                     std::optional<Function> catchFErr,
 	                     int catchLoopDepth,
 	                     std::function<void()> action,
 	                     bool useLoopDepth = true);
-	Context TryCatchCompile(std::shared_ptr<CodeBlock> block, Context& cx);
+	Context TryCatchCompile(std::shared_ptr<CodeBlock> block, Context cx);
 	void WriteTemplate(std::ostream& writer, const std::vector<VarDeclaration>& extraParameters);
 	void WriteActorClass(std::ostream& writer, const std::string& fullStateClassName, Function& body);
 

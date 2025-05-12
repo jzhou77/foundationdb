@@ -168,7 +168,7 @@ public:
 	}
 
 	Token operator[](int index) const {
-		if (index < 0 || index >= length()) {
+		if (index < 0 || index >= tokens.size()) {
 			assert(false);
 			throw std::out_of_range("Index out of range");
 		}
