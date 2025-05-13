@@ -358,12 +358,12 @@ std::shared_ptr<CodeBlock> ActorCompiler::AsCodeBlock(std::shared_ptr<Statement>
 	return std::make_shared<CodeBlock>(std::vector<std::shared_ptr<Statement>>{ stmt });
 }
 
-void ActorCompiler::CompilePlainStatement(const std::shared_ptr<PlainOldCodeStatement> stmt, Context& cx) {
+void ActorCompiler::CompilePlainStatement(const std::shared_ptr<PlainOldCodeStatement> stmt, Context cx) {
 	LineNumber(cx.target.value(), stmt->firstSourceLine);
 	cx.target.value().WriteLine(stmt->code);
 }
 
-void ActorCompiler::CompileStateDeclStatement(const std::shared_ptr<StateDeclarationStatement> stmt, Context& cx) {
+void ActorCompiler::CompileStateDeclStatement(const std::shared_ptr<StateDeclarationStatement> stmt, Context cx) {
 	// if this state declaration is at the very top of the actor body
 	bool isAtTop = false;
 	std::vector<std::shared_ptr<Statement>>& stmts = actor.body->statements;
@@ -392,7 +392,6 @@ void ActorCompiler::CompileStateDeclStatement(const std::shared_ptr<StateDeclara
 		stateVar.sourceLine = stmt->firstSourceLine;
 		stateVar.name = stmt->decl.name;
 		stateVar.type = stmt->decl.type;
-		stateVar.initializer = nullptr;
 		state.push_back(stateVar);
 
 		if (!stmt->decl.initializer.empty()) {
@@ -407,7 +406,7 @@ void ActorCompiler::CompileStateDeclStatement(const std::shared_ptr<StateDeclara
 	}
 }
 
-void ActorCompiler::CompileForStatement(const std::shared_ptr<ForStatement> stmt, Context& cx) {
+void ActorCompiler::CompileForStatement(const std::shared_ptr<ForStatement> stmt, Context cx) {
 	// for( initExpression; condExpression; nextExpression ) body;
 	bool noCondition = stmt->condExpression.empty() || stmt->condExpression == "true" || stmt->condExpression == "1";
 
@@ -481,7 +480,7 @@ void ActorCompiler::CompileForStatement(const std::shared_ptr<ForStatement> stmt
 
 		cx.target.value().WriteLine(std::format("loopDepth = {0};", loopF.call("loopDepth")));
 
-		if (continueF != loopF && continueF.wasCalled) {
+		if (continueF != loopF && continueF.getWasCalled()) {
 			std::shared_ptr<PlainOldCodeStatement> nextStmt =
 			    std::make_shared<PlainOldCodeStatement>(stmt->nextExpression + ";");
 			nextStmt->firstSourceLine = stmt->firstSourceLine;
@@ -490,7 +489,7 @@ void ActorCompiler::CompileForStatement(const std::shared_ptr<ForStatement> stmt
 			continueF.WriteLine(std::format("if (loopDepth == 0) return {0};", loopF.call("0")));
 		}
 
-		if (breakF.wasCalled) {
+		if (breakF.getWasCalled()) {
 			auto newCx = cx.WithTarget(breakF);
 			TryCatch(newCx, cx.catchFErr, cx.tryLoopDepth, [&]() {
 				breakF.WriteLine(std::format("return {0};", cx.next.value().call("loopDepth")));
@@ -508,7 +507,7 @@ std::string ActorCompiler::getIteratorName(Context cx) {
 	return std::format("{0}{1}", name, iterators[name]++);
 }
 
-void ActorCompiler::CompileRangeForStatement(const std::shared_ptr<RangeForStatement> stmt, Context& cx) {
+void ActorCompiler::CompileRangeForStatement(const std::shared_ptr<RangeForStatement> stmt, Context cx) {
 	// If stmt does not contain a wait statement, rewrite the original c++11 range-based for loop
 	// If there is a wait, we need to rewrite the loop as:
 	// for(a:b) c; ==> for(__iter=std::begin(b); __iter!=std::end(b); ++__iter) { a = *__iter; c; }
@@ -560,7 +559,7 @@ void ActorCompiler::CompileRangeForStatement(const std::shared_ptr<RangeForState
 	}
 }
 
-void ActorCompiler::CompileWhileStatement(const std::shared_ptr<WhileStatement> stmt, Context& cx) {
+void ActorCompiler::CompileWhileStatement(const std::shared_ptr<WhileStatement> stmt, Context cx) {
 	// Compile while (x) { y } as for(;x;) { y }
 	auto equivalent = std::make_shared<ForStatement>("", stmt->expression, "", stmt->body);
 	equivalent->firstSourceLine = stmt->firstSourceLine;
@@ -568,7 +567,7 @@ void ActorCompiler::CompileWhileStatement(const std::shared_ptr<WhileStatement> 
 	CompileForStatement(equivalent, cx);
 }
 
-void ActorCompiler::CompileLoopStatement(const std::shared_ptr<LoopStatement> stmt, Context& cx) {
+void ActorCompiler::CompileLoopStatement(const std::shared_ptr<LoopStatement> stmt, Context cx) {
 	// Compile loop { body } as for(;;;) { body }
 	auto equivalent = std::make_shared<ForStatement>("", "", "", stmt->body);
 	equivalent->firstSourceLine = stmt->firstSourceLine;
@@ -581,7 +580,7 @@ void ActorCompiler::CompileLoopStatement(const std::shared_ptr<LoopStatement> st
 bool ActorCompiler::EmitNativeLoop(int sourceLine,
                                    const std::string& head,
                                    std::shared_ptr<Statement> body,
-                                   Context& cx) {
+                                   Context cx) {
 	LineNumber(cx.target.value(), sourceLine);
 	cx.target.value().WriteLine(head + " {");
 	cx.target.value().Indent(+1);
@@ -592,7 +591,7 @@ bool ActorCompiler::EmitNativeLoop(int sourceLine,
 	cx.target.value().Indent(-1);
 	cx.target.value().WriteLine("}");
 
-	return !literalBreak.wasCalled;
+	return !literalBreak.getWasCalled();
 }
 
 struct WhenInfo {
@@ -605,7 +604,7 @@ struct WhenInfo {
 	std::string callbackTypeInStateClass;
 };
 
-void ActorCompiler::CompileChooseStatement(const std::shared_ptr<ChooseStatement> stmt, Context& cx) {
+void ActorCompiler::CompileChooseStatement(const std::shared_ptr<ChooseStatement> stmt, Context cx) {
 	int group = ++this->chooseGroups;
 	// std::string cbGroup = "ChooseGroup" + getFunction(cx.target.name, "W").name; // SOMEDAY
 	auto codeblock = dynamic_pointer_cast<CodeBlock>(stmt->body);
@@ -660,7 +659,7 @@ void ActorCompiler::CompileChooseStatement(const std::shared_ptr<ChooseStatement
 		}
 	}
 
-	auto exitFunc = getFunction("exitChoose", "", {});
+	auto& exitFunc = getFunction("exitChoose", "", {});
 	exitFunc.returnType = "void";
 	exitFunc.WriteLine(std::format("if ({}->actor_wait_state > 0) {}->actor_wait_state = 0;", This, This));
 
@@ -835,7 +834,7 @@ void ActorCompiler::CompileChooseStatement(const std::shared_ptr<ChooseStatement
 		cx.unreachable();
 }
 
-void ActorCompiler::CompileBreakStatement(const std::shared_ptr<BreakStatement>& stmt, Context& cx) {
+void ActorCompiler::CompileBreakStatement(const std::shared_ptr<BreakStatement>& stmt, Context cx) {
 	if (!cx.breakF.has_value())
 		throw Error(stmt->firstSourceLine, "break outside loop");
 
@@ -847,7 +846,7 @@ void ActorCompiler::CompileBreakStatement(const std::shared_ptr<BreakStatement>&
 	cx.unreachable();
 }
 
-void ActorCompiler::CompileContinueStatement(const std::shared_ptr<ContinueStatement>& stmt, Context& cx) {
+void ActorCompiler::CompileContinueStatement(const std::shared_ptr<ContinueStatement>& stmt, Context cx) {
 	if (!cx.continueF.has_value())
 		throw Error(stmt->firstSourceLine, "continue outside loop");
 
@@ -859,7 +858,7 @@ void ActorCompiler::CompileContinueStatement(const std::shared_ptr<ContinueState
 	cx.unreachable();
 }
 
-void ActorCompiler::CompileWaitStatement(const std::shared_ptr<WaitStatement>& stmt, Context& cx) {
+void ActorCompiler::CompileWaitStatement(const std::shared_ptr<WaitStatement>& stmt, Context cx) {
 	std::vector<std::shared_ptr<Statement>> statements;
 	std::shared_ptr<WhenStatement> whenStmt = std::make_shared<WhenStatement>(stmt, nullptr);
 	whenStmt->firstSourceLine = stmt->firstSourceLine;
@@ -876,7 +875,7 @@ void ActorCompiler::CompileWaitStatement(const std::shared_ptr<WaitStatement>& s
 	CompileChooseStatement(equiv, cx);
 }
 
-void ActorCompiler::CompileCodeBlockStatement(const std::shared_ptr<CodeBlock>& stmt, Context& cx) {
+void ActorCompiler::CompileCodeBlockStatement(const std::shared_ptr<CodeBlock>& stmt, Context cx) {
 	cx.target.value().WriteLine("{");
 	cx.target.value().Indent(+1);
 	Context end = Compile(stmt, cx, true);
@@ -889,7 +888,7 @@ void ActorCompiler::CompileCodeBlockStatement(const std::shared_ptr<CodeBlock>& 
 		end.target->WriteLine(std::format("loopDepth = {0};", cx.next->call("loopDepth")));
 }
 
-void ActorCompiler::CompileReturnStatement(const std::shared_ptr<ReturnStatement>& stmt, Context& cx) {
+void ActorCompiler::CompileReturnStatement(const std::shared_ptr<ReturnStatement>& stmt, Context cx) {
 	LineNumber(cx.target.value(), stmt->firstSourceLine);
 
 	if ((stmt->expression == "") != (actor.returnType.empty()))
@@ -938,7 +937,7 @@ void ActorCompiler::CompileReturnStatement(const std::shared_ptr<ReturnStatement
 	cx.unreachable();
 }
 
-void ActorCompiler::CompileIfStatement(const std::shared_ptr<IfStatement>& stmt, Context& cx) {
+void ActorCompiler::CompileIfStatement(const std::shared_ptr<IfStatement>& stmt, Context cx) {
 	bool useContinuation = WillContinue(stmt->ifBody) || WillContinue(stmt->elseBody);
 	LineNumber(cx.target.value(), stmt->firstSourceLine);
 
@@ -974,13 +973,13 @@ void ActorCompiler::CompileIfStatement(const std::shared_ptr<IfStatement>& stmt,
 
 	if (!ifTarget.has_value() && stmt->elseBody != nullptr && !elseTarget.has_value())
 		cx.unreachable();
-	else if (!cx.next.value().wasCalled && useContinuation) {
+	else if (!cx.next.value().getWasCalled() && useContinuation) {
 		assert(false);
 		throw std::runtime_error("Internal error: IfStatement: next not called?");
 	}
 }
 
-void ActorCompiler::CompileTryStatement(const std::shared_ptr<TryStatement>& stmt, Context& cx) {
+void ActorCompiler::CompileTryStatement(const std::shared_ptr<TryStatement>& stmt, Context cx) {
 	bool reachable = false;
 	if (stmt->catches.size() != 1)
 		throw Error(stmt->firstSourceLine, "try statement must have exactly one catch clause");
@@ -1001,7 +1000,7 @@ void ActorCompiler::CompileTryStatement(const std::shared_ptr<TryStatement>& stm
 	if (catchErrorParameterName == "")
 		catchErrorParameterName = "__current_error";
 
-	Function catchFErr =
+	Function& catchFErr =
 	    getFunction(cx.target->name, "Catch", { "const Error& " + catchErrorParameterName }, { loopDepth0 });
 	catchFErr.exceptionParameterIs = catchErrorParameterName;
 	Context catchCx = cx.WithCatch(catchFErr);
@@ -1015,8 +1014,7 @@ void ActorCompiler::CompileTryStatement(const std::shared_ptr<TryStatement>& stm
 	}
 
 	// Now to write the catch function
-	Context catchFErrCx = cx.WithTarget(catchFErr);
-	TryCatch(catchFErrCx, cx.catchFErr, cx.tryLoopDepth, [&]() {
+	TryCatch(cx.WithTarget(catchFErr), cx.catchFErr, cx.tryLoopDepth, [&]() {
 		Context cend = Compile(AsCodeBlock(c.body), cx.WithTarget(catchFErr), true);
 		if (cend.target.has_value()) {
 			cend.target->WriteLine("loopDepth = " + cx.next->call("loopDepth") + ";");
@@ -1028,7 +1026,7 @@ void ActorCompiler::CompileTryStatement(const std::shared_ptr<TryStatement>& stm
 		cx.unreachable();
 }
 
-void ActorCompiler::CompileThrowStatement(const std::shared_ptr<ThrowStatement>& stmt, Context& cx) {
+void ActorCompiler::CompileThrowStatement(const std::shared_ptr<ThrowStatement>& stmt, Context cx) {
 	LineNumber(cx.target.value(), stmt->firstSourceLine);
 
 	if (stmt->expression == "") {
@@ -1046,7 +1044,7 @@ void ActorCompiler::CompileThrowStatement(const std::shared_ptr<ThrowStatement>&
 	cx.unreachable();
 }
 
-void ActorCompiler::CompileStatement(const std::shared_ptr<Statement>& stmt, Context& cx) {
+void ActorCompiler::CompileStatement(const std::shared_ptr<Statement>& stmt, Context cx) {
 	// Since C++ doesn't have reflection like C#, we need a different approach
 	// Using a visitor pattern or function dispatch map
 
@@ -1095,8 +1093,10 @@ Context ActorCompiler::Compile(std::shared_ptr<CodeBlock> block, const Context& 
 
 	for (auto& stmt : block->statements) {
 		if (cx.target == std::nullopt) {
-			throw Error(stmt->firstSourceLine, "Unreachable code.");
-			// std::cerr << "\t(WARNING) Unreachable code at line " << stmt->firstSourceLine << "." << std::endl;
+			std::cerr << "\t(WARNING) Unreachable code at line " << stmt->firstSourceLine << ". " << stmt->toString()
+			          << std::endl;
+			std::cerr << "\n\tblock: " << block->toString() << std::endl;
+			throw Error(stmt->firstSourceLine, "Unreachable code." + stmt->toString());
 			// break;
 		}
 
@@ -1106,7 +1106,7 @@ Context ActorCompiler::Compile(std::shared_ptr<CodeBlock> block, const Context& 
 
 		CompileStatement(stmt, cx);
 
-		if (cx.next.value().wasCalled) {
+		if (cx.next.value().getWasCalled()) {
 			if (cx.target == std::nullopt) {
 				assert(false);
 				throw std::runtime_error("Unreachable continuation called?");
@@ -1161,10 +1161,10 @@ void ActorCompiler::WriteFunction(std::ostream& writer, Function& func, const st
 	writer << memberIndentStr << "}" << std::endl;
 }
 
-Function ActorCompiler::getFunction(const std::string& baseName,
-                                    const std::string& addName,
-                                    const std::vector<std::string>& formalParameters,
-                                    const std::vector<std::string>& overloadFormalParameters) {
+Function& ActorCompiler::getFunction(const std::string& baseName,
+                                     const std::string& addName,
+                                     const std::vector<std::string>& formalParameters,
+                                     const std::vector<std::string>& overloadFormalParameters) {
 	std::string proposedName;
 	if (addName == "cont" && baseName.length() >= 5 && baseName.substr(baseName.length() - 5, 4) == "cont") {
 		proposedName = baseName.substr(0, baseName.length() - 1);
@@ -1190,12 +1190,12 @@ Function ActorCompiler::getFunction(const std::string& baseName,
 
 	f.Indent(codeIndent);
 	functions[f.name] = f;
-	return f;
+	return functions[f.name];
 }
 
-Function ActorCompiler::getFunction(const std::string& baseName,
-                                    const std::string& addName,
-                                    const std::vector<std::string>& formalParameters) {
+Function& ActorCompiler::getFunction(const std::string& baseName,
+                                     const std::string& addName,
+                                     const std::vector<std::string>& formalParameters) {
 	return getFunction(baseName, addName, formalParameters, {});
 }
 
@@ -1461,7 +1461,7 @@ void ActorCompiler::Write(std::ostream& writer) {
 		return;
 	}
 
-	auto body = getFunction("", "body", { loopDepth0 });
+	auto& body = getFunction("", "body", { loopDepth0 });
 	Context bodyContext;
 	bodyContext.target = body;
 	bodyContext.catchFErr = getFunction(body.name, "Catch", { "Error error" }, { loopDepth0 });
@@ -1474,7 +1474,7 @@ void ActorCompiler::Write(std::ostream& writer) {
 			CompileStatement(returnStmt, endContext);
 		} else {
 			std::cerr << "\t(WARNING) Actor " << actor.name << " does not return a value" << std::endl;
-			// throw Error(actor.sourceLine, std::format("Actor {} fails to return a value", actor.name));
+			throw Error(actor.sourceLine, std::format("Actor {} fails to return a value", actor.name));
 		}
 	}
 

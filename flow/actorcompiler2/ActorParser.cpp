@@ -42,7 +42,7 @@ Token Token::Assert(const std::string& error, std::function<bool(const Token&)> 
 	return *this;
 }
 
-TokenRange Token::getMatchingRangeIn(const TokenRange& range) const {
+TokenRange Token::getMatchingRangeIn(TokenRange range) const {
 	std::function<bool(const Token&)> pred;
 	int dir = 0;
 	if (value == "(") {
@@ -145,7 +145,7 @@ std::vector<Token> notInsideAngleBrackets(const TokenRange& tokens) {
 // ActorParser class
 std::set<std::string> ActorParser::illegalKeywords = { "goto", "do", "finally", "__if_exists", "__if_not_exists" };
 
-bool ActorParser::parseClassContext(const TokenRange& toks, std::string& name) const {
+bool ActorParser::parseClassContext(TokenRange toks, std::string& name) const {
 	name = "";
 	if (toks.empty()) {
 		return false;
@@ -321,26 +321,25 @@ void ActorParser::write(std::ostream& writer, const std::string& destFileName) {
 	}
 }
 
-std::vector<TokenRange> ActorParser::splitParameterList(const TokenRange& toks, const std::string& delimiter) const {
+std::vector<TokenRange> ActorParser::splitParameterList(TokenRange toks, const std::string& delimiter) const {
 	std::vector<TokenRange> result;
 	if (toks.empty())
 		return result;
 
-	TokenRange toks2 = toks;
 	while (true) {
-		auto tokens = AngleBracketParser::notInsideAngleBrackets(toks2);
+		auto tokens = AngleBracketParser::notInsideAngleBrackets(toks);
 		int i = 0;
 		for (; i < tokens.size(); i++) {
-			if (tokens[i].value == delimiter && tokens[i].parenDepth == toks2.first().parenDepth) {
+			if (tokens[i].value == delimiter && tokens[i].parenDepth == toks.first().parenDepth) {
 				break;
 			}
 		}
 		if (i == tokens.size())
 			break;
-		result.push_back(range(toks2.begin(), tokens[i].position));
-		toks2 = range(tokens[i].position + 1, toks2.end());
+		result.push_back(range(toks.begin(), tokens[i].position));
+		toks = range(tokens[i].position + 1, toks.end());
 	}
-	result.push_back(toks2);
+	result.push_back(toks);
 	return result;
 }
 
@@ -362,12 +361,12 @@ std::vector<Token> ActorParser::normalizeWhitespace(const std::vector<Token>& to
 	return result;
 }
 
-std::vector<Token> ActorParser::normalizeWhitespace(const TokenRange& tokenstokens) const {
+std::vector<Token> ActorParser::normalizeWhitespace(const TokenRange& tokens) const {
 	std::vector<Token> result;
 	bool inWhitespace = false;
 	bool leading = true;
-	for (int i = tokenstokens.begin(); i < tokenstokens.end(); i++) {
-		const auto& tok = tokenstokens[i];
+	for (int i = tokens.begin(); i < tokens.end(); i++) {
+		const auto& tok = tokens[i];
 		if (!tok.isWhitespace()) {
 			if (inWhitespace && !leading)
 				result.emplace_back(" ");
@@ -381,7 +380,7 @@ std::vector<Token> ActorParser::normalizeWhitespace(const TokenRange& tokenstoke
 	return result;
 }
 
-void ActorParser::parseDeclaration(const TokenRange& tokens,
+void ActorParser::parseDeclaration(TokenRange tokens,
                                    Token& name,
                                    TokenRange& type,
                                    TokenRange& initializer,
@@ -421,7 +420,7 @@ void ActorParser::parseDeclaration(const TokenRange& tokens,
 	type = range(beforeInitializer.begin(), name.position);
 }
 
-VarDeclaration ActorParser::parseVarDeclaration(const TokenRange& tokens) const {
+VarDeclaration ActorParser::parseVarDeclaration(TokenRange tokens) const {
 	Token name;
 	TokenRange type, initializer;
 	bool constructorSyntax;
@@ -432,7 +431,7 @@ VarDeclaration ActorParser::parseVarDeclaration(const TokenRange& tokens) const 
 		                   .initializerConstructorSyntax = constructorSyntax };
 }
 
-void ActorParser::parseDescrHeading(Descr& descr, const TokenRange& toks) const {
+void ActorParser::parseDescrHeading(Descr& descr, TokenRange toks) const {
 	// Check if the first non-whitespace token is "struct"
 	Token firstToken = toks.first(NonWhitespace).value();
 	if (firstToken.value != "struct") {
@@ -464,7 +463,7 @@ void ActorParser::parseDescrHeading(Descr& descr, const TokenRange& toks) const 
 	descr.name = trim(str(currentToks));
 }
 
-void ActorParser::parseTestCaseHeading(Actor& actor, const TokenRange& toks) const {
+void ActorParser::parseTestCaseHeading(Actor& actor, TokenRange toks) const {
 	actor.isStatic = true;
 	auto paramRange =
 	    toks.last(NonWhitespace)
@@ -478,9 +477,8 @@ void ActorParser::parseTestCaseHeading(Actor& actor, const TokenRange& toks) con
 	actor.returnType = "Void";
 }
 
-void ActorParser::parseActorHeading(Actor& actor, const TokenRange& toks) const {
+void ActorParser::parseActorHeading(Actor& actor, TokenRange toks) const {
 	auto templateToken = toks.first(NonWhitespace).value();
-	TokenRange toks2 = toks;
 	if (templateToken.value == "template") {
 		auto templateParams = range(templateToken.position + 1, toks.end())
 		                          .first(NonWhitespace)
@@ -492,44 +490,44 @@ void ActorParser::parseActorHeading(Actor& actor, const TokenRange& toks) const 
 		for (const auto& param : params) {
 			actor.templateFormals.push_back(parseVarDeclaration(param));
 		}
-		toks2 = range(templateParams.end() + 1, toks.end());
+		toks = range(templateParams.end() + 1, toks.end());
 	}
-	auto attribute = toks2.first(NonWhitespace).value();
+	auto attribute = toks.first(NonWhitespace).value();
 	while (attribute.value == "[") {
-		auto attributeContents = attribute.getMatchingRangeIn(toks2);
+		auto attributeContents = attribute.getMatchingRangeIn(toks);
 		if (attributeContents.length() < 2 || attributeContents.first().value != "[" ||
 		    attributeContents.last().value != "]")
 			throw Error(actor.sourceLine, "Invalid attribute: Expected [[...]]");
 		actor.attributes.push_back("[" + str(normalizeWhitespace(attributeContents)) + "]");
-		toks2 = range(attributeContents.end() + 1, toks2.end());
-		attribute = toks2.first(NonWhitespace).value();
+		toks = range(attributeContents.end() + 1, toks.end());
+		attribute = toks.first(NonWhitespace).value();
 	}
 
 	auto staticKeyword = toks.first(NonWhitespace).value();
 	if (staticKeyword.value == "static") {
 		actor.isStatic = true;
-		toks2 = range(staticKeyword.position + 1, toks2.end());
+		toks = range(staticKeyword.position + 1, toks.end());
 	}
-	auto uncancellableKeyword = toks2.first(NonWhitespace).value();
+	auto uncancellableKeyword = toks.first(NonWhitespace).value();
 	if (uncancellableKeyword.value == "UNCANCELLABLE") {
 		actor.setUncancellable();
-		toks2 = range(uncancellableKeyword.position + 1, toks2.end());
+		toks = range(uncancellableKeyword.position + 1, toks.end());
 	}
 
 	// Find the parameter list
 	auto paramRange =
-	    toks2.last(NonWhitespace)
+	    toks.last(NonWhitespace)
 	        .Assert("Unexpected tokens after actor parameter list.",
-	                [&](const Token& t) { return t.value == ")" && t.parenDepth == toks2.first().parenDepth; })
-	        .getMatchingRangeIn(toks2);
+	                [&](const Token& t) { return t.value == ")" && t.parenDepth == toks.first().parenDepth; })
+	        .getMatchingRangeIn(toks);
 	auto params = splitParameterList(paramRange, ",");
 	for (const auto& param : params) {
 		actor.parameters.push_back(parseVarDeclaration(param));
 	}
-	auto name = range(toks2.begin(), paramRange.begin() - 1).last(NonWhitespace);
+	auto name = range(toks.begin(), paramRange.begin() - 1).last(NonWhitespace);
 	actor.name = name.value;
 
-	auto returnType = TokenRange(toks2.getAllTokens(), toks2.first().position + 1, name.position).SkipWhile(Whitespace);
+	auto returnType = TokenRange(toks.getAllTokens(), toks.first().position + 1, name.position).SkipWhile(Whitespace);
 	auto retToken = returnType.first();
 	if (retToken.value == "Future") {
 		auto ofType = returnType.skip(1)
@@ -538,20 +536,20 @@ void ActorParser::parseActorHeading(Actor& actor, const TokenRange& toks) const 
 		                  .Assert("Expected <", [&](const Token& t) { return t.value == "<"; })
 		                  .getMatchingRangeIn(returnType);
 		actor.returnType = str(normalizeWhitespace(ofType));
-		toks2 = range(ofType.end() + 1, returnType.end());
+		toks = range(ofType.end() + 1, returnType.end());
 	} else if (retToken.value ==
 	           "void" /* && !returnType.skip(1).any([this](const Token& t) { return !t.isWhitespace(); }) */) {
 		actor.returnType = ""; // XXX
-		toks2 = returnType.skip(1);
+		toks = returnType.skip(1);
 	} else {
 		throw Error(actor.sourceLine, "Actor apparently does not return Future<T>");
 	}
-	toks2 = toks2.SkipWhile(Whitespace);
-	if (!toks2.empty()) {
-		if (toks2.last().value == "::") {
-			actor.nameSpace = str(range(toks2.begin(), toks2.end() - 1));
+	toks = toks.SkipWhile(Whitespace);
+	if (!toks.empty()) {
+		if (toks.last().value == "::") {
+			actor.nameSpace = str(range(toks.begin(), toks.end() - 1));
 		} else {
-			std::cerr << "Tokens: '" << str(toks2) << "' " << toks2.length() << " '" << toks2.last().value << "'\n";
+			std::cerr << "Tokens: '" << str(toks) << "' " << toks.length() << " '" << toks.last().value << "'\n";
 			throw Error(actor.sourceLine, "Unrecognized tokens preceding parameter list in actor declaration");
 		}
 	}
@@ -575,15 +573,15 @@ void ActorParser::parseActorHeading(Actor& actor, const TokenRange& toks) const 
 	                       actor.attributes.end());
 }
 
-std::shared_ptr<LoopStatement> ActorParser::parseLoopStatement(const TokenRange& toks) const {
+std::shared_ptr<LoopStatement> ActorParser::parseLoopStatement(TokenRange toks) const {
 	return std::make_shared<LoopStatement>(parseCompoundStatement(toks.consume("loop")));
 }
 
-std::shared_ptr<ChooseStatement> ActorParser::parseChooseStatement(const TokenRange& toks) const {
+std::shared_ptr<ChooseStatement> ActorParser::parseChooseStatement(TokenRange toks) const {
 	return std::make_shared<ChooseStatement>(parseCompoundStatement(toks.consume("choose")));
 }
 
-std::shared_ptr<WhenStatement> ActorParser::parseWhenStatement(const TokenRange& toks) const {
+std::shared_ptr<WhenStatement> ActorParser::parseWhenStatement(TokenRange toks) const {
 	auto expr = toks.consume("when")
 	                .SkipWhile(Whitespace)
 	                .first()
@@ -594,22 +592,22 @@ std::shared_ptr<WhenStatement> ActorParser::parseWhenStatement(const TokenRange&
 	                                       parseCompoundStatement(range(expr.end() + 1, toks.end())));
 }
 
-std::shared_ptr<StateDeclarationStatement> ActorParser::parseStateDeclaration(const TokenRange& toks) const {
-	auto toks2 = toks.consume("state").RevSkipWhile([](const Token& t) { return t.value == ";"; });
-	return std::make_shared<StateDeclarationStatement>(parseVarDeclaration(toks2));
+std::shared_ptr<StateDeclarationStatement> ActorParser::parseStateDeclaration(TokenRange toks) const {
+	toks = toks.consume("state").RevSkipWhile([](const Token& t) { return t.value == ";"; });
+	return std::make_shared<StateDeclarationStatement>(parseVarDeclaration(toks));
 }
 
-std::shared_ptr<ReturnStatement> ActorParser::parseReturnStatement(const TokenRange& toks) const {
-	auto toks2 = toks.consume("return").RevSkipWhile([](const Token& t) { return t.value == ";"; });
-	return std::make_shared<ReturnStatement>(str(normalizeWhitespace(toks2)));
+std::shared_ptr<ReturnStatement> ActorParser::parseReturnStatement(TokenRange toks) const {
+	toks = toks.consume("return").RevSkipWhile([](const Token& t) { return t.value == ";"; });
+	return std::make_shared<ReturnStatement>(str(normalizeWhitespace(toks)));
 }
 
-std::shared_ptr<ThrowStatement> ActorParser::parseThrowStatement(const TokenRange& toks) const {
-	auto toks2 = toks.consume("throw").RevSkipWhile([](const Token& t) { return t.value == ";"; });
-	return std::make_shared<ThrowStatement>(str(normalizeWhitespace(toks2)));
+std::shared_ptr<ThrowStatement> ActorParser::parseThrowStatement(TokenRange toks) const {
+	toks = toks.consume("throw").RevSkipWhile([](const Token& t) { return t.value == ";"; });
+	return std::make_shared<ThrowStatement>(str(normalizeWhitespace(toks)));
 }
 
-std::shared_ptr<WaitStatement> ActorParser::parseWaitStatement(const TokenRange& toks) const {
+std::shared_ptr<WaitStatement> ActorParser::parseWaitStatement(TokenRange toks) const {
 	std::shared_ptr<WaitStatement> ws = std::make_shared<WaitStatement>();
 	ws->firstSourceLine = toks.first().sourceLine;
 	if (toks.first().value == "state") {
@@ -662,7 +660,7 @@ std::shared_ptr<WaitStatement> ActorParser::parseWaitStatement(const TokenRange&
 	return ws;
 }
 
-std::shared_ptr<WhileStatement> ActorParser::parseWhileStatement(const TokenRange& toks) const {
+std::shared_ptr<WhileStatement> ActorParser::parseWhileStatement(TokenRange toks) const {
 	auto expr = toks.consume("while")
 	                .first(NonWhitespace)
 	                .value()
@@ -672,7 +670,7 @@ std::shared_ptr<WhileStatement> ActorParser::parseWhileStatement(const TokenRang
 	                                        parseCompoundStatement(range(expr.end() + 1, toks.end())));
 }
 
-std::shared_ptr<Statement> ActorParser::parseForStatement(const TokenRange& toks) const {
+std::shared_ptr<Statement> ActorParser::parseForStatement(TokenRange toks) const {
 	auto head = toks.consume("for")
 	                .first(NonWhitespace)
 	                .value()
@@ -703,25 +701,23 @@ std::shared_ptr<Statement> ActorParser::parseForStatement(const TokenRange& toks
 	    parseCompoundStatement(range(head.end() + 1, toks.end())));
 }
 
-std::shared_ptr<Statement> ActorParser::parseIfStatement(const TokenRange& toks) const {
-	auto toks2 = toks.consume("if");
-	toks2 = toks2.SkipWhile(Whitespace);
-	bool _constexpr = toks2.first().value == "constexpr";
+std::shared_ptr<Statement> ActorParser::parseIfStatement(TokenRange toks) const {
+	toks = toks.consume("if");
+	toks = toks.SkipWhile(Whitespace);
+	bool _constexpr = toks.first().value == "constexpr";
 	if (_constexpr) {
-		toks2 = toks2.consume("constexpr").SkipWhile(Whitespace);
+		toks = toks.consume("constexpr").SkipWhile(Whitespace);
 	}
 
-	auto expr = toks2.first(NonWhitespace)
+	auto expr = toks.first(NonWhitespace)
 	                .value()
 	                .Assert("Expected (", [&](const Token& t) { return t.value == "("; })
-	                .getMatchingRangeIn(toks2);
-	return std::make_shared<IfStatement>(str(normalizeWhitespace(expr)),
-	                                     _constexpr,
-	                                     parseCompoundStatement(range(expr.end() + 1, toks2.end())),
-	                                     nullptr);
+	                .getMatchingRangeIn(toks);
+	return std::make_shared<IfStatement>(
+	    str(normalizeWhitespace(expr)), _constexpr, parseCompoundStatement(range(expr.end() + 1, toks.end())), nullptr);
 }
 
-void ActorParser::parseElseStatement(const TokenRange& toks, const std::shared_ptr<Statement>& prevStatement) const {
+void ActorParser::parseElseStatement(TokenRange toks, const std::shared_ptr<Statement>& prevStatement) const {
 	auto ifStatement = std::dynamic_pointer_cast<IfStatement>(prevStatement);
 	while (ifStatement != nullptr && ifStatement->elseBody != nullptr)
 		ifStatement = std::dynamic_pointer_cast<IfStatement>(ifStatement->elseBody);
@@ -732,12 +728,12 @@ void ActorParser::parseElseStatement(const TokenRange& toks, const std::shared_p
 	ifStatement->elseBody = parseCompoundStatement(toks.consume("else"));
 }
 
-std::shared_ptr<Statement> ActorParser::parseTryStatement(const TokenRange& toks) const {
+std::shared_ptr<Statement> ActorParser::parseTryStatement(TokenRange toks) const {
 	return std::make_shared<TryStatement>(parseCompoundStatement(toks.consume("try")),
 	                                      std::vector<TryStatement::Catch>{});
 }
 
-void ActorParser::parseCatchStatement(const TokenRange& toks, const std::shared_ptr<Statement>& prevStatement) const {
+void ActorParser::parseCatchStatement(TokenRange toks, const std::shared_ptr<Statement>& prevStatement) const {
 	auto tryStatement = std::dynamic_pointer_cast<TryStatement>(prevStatement);
 	if (!tryStatement)
 		throw Error(toks.first().sourceLine, "catch without matching try");
@@ -751,7 +747,7 @@ void ActorParser::parseCatchStatement(const TokenRange& toks, const std::shared_
 	                                                     expr.first().sourceLine });
 }
 
-void ActorParser::parseDeclaration(const TokenRange& toks, std::vector<Declaration>& declarations) const {
+void ActorParser::parseDeclaration(TokenRange toks, std::vector<Declaration>& declarations) const {
 	Declaration dec;
 	auto delim = toks.first([&](const Token& t) { return t.value == ";"; }).value();
 	auto nameRange = range(toks.begin(), delim.position).RevSkipWhile(Whitespace).RevTakeWhile(NonWhitespace);
@@ -764,65 +760,64 @@ void ActorParser::parseDeclaration(const TokenRange& toks, std::vector<Declarati
 	declarations.push_back(dec);
 }
 
-void ActorParser::parseStatement(const TokenRange& toks, std::vector<std::shared_ptr<Statement>>& statements) const {
-	auto toks2 = toks.SkipWhile(Whitespace);
-	std::function<void(const std::shared_ptr<Statement>&)> add = [&statements,
-	                                                              &toks2](std::shared_ptr<Statement> stmt) {
-		stmt->firstSourceLine = toks2.first().sourceLine;
+void ActorParser::parseStatement(TokenRange toks, std::vector<std::shared_ptr<Statement>>& statements) const {
+	toks = toks.SkipWhile(Whitespace);
+	std::function<void(const std::shared_ptr<Statement>&)> add = [&statements, &toks](std::shared_ptr<Statement> stmt) {
+		stmt->firstSourceLine = toks.first().sourceLine;
 		statements.push_back(stmt);
 	};
-	const std::string& value = toks2.first().value;
+	const std::string& value = toks.first().value;
 	if (value == "loop") {
-		add(parseLoopStatement(toks2));
+		add(parseLoopStatement(toks));
 	} else if (value == "while") {
-		add(parseWhileStatement(toks2));
+		add(parseWhileStatement(toks));
 	} else if (value == "for") {
-		add(parseForStatement(toks2));
+		add(parseForStatement(toks));
 	} else if (value == "break") {
 		add(std::make_shared<BreakStatement>());
 	} else if (value == "continue") {
 		add(std::make_shared<ContinueStatement>());
 	} else if (value == "return") {
-		add(parseReturnStatement(toks2));
+		add(parseReturnStatement(toks));
 	} else if (value == "{") {
-		add(parseCompoundStatement(toks2));
+		add(parseCompoundStatement(toks));
 	} else if (value == "if") {
-		add(parseIfStatement(toks2));
+		add(parseIfStatement(toks));
 	} else if (value == "else") {
-		parseElseStatement(toks2, statements.back());
+		parseElseStatement(toks, statements.back());
 	} else if (value == "choose") {
-		add(parseChooseStatement(toks2));
+		add(parseChooseStatement(toks));
 	} else if (value == "when") {
-		add(parseWhenStatement(toks2));
+		add(parseWhenStatement(toks));
 	} else if (value == "try") {
-		add(parseTryStatement(toks2));
+		add(parseTryStatement(toks));
 	} else if (value == "catch") {
-		parseCatchStatement(toks2, statements.back());
+		parseCatchStatement(toks, statements.back());
 	} else if (value == "throw") {
-		add(parseThrowStatement(toks2));
+		add(parseThrowStatement(toks));
 	} else {
-		if (illegalKeywords.count(toks2.first().value)) {
-			throw Error(toks2.first().sourceLine,
-			            std::format("Statement '{}' not supported in actors.", toks2.first().value));
+		if (illegalKeywords.count(toks.first().value)) {
+			throw Error(toks.first().sourceLine,
+			            std::format("Statement '{}' not supported in actors.", toks.first().value));
 		}
-		if (toks2.any([&](const Token& t) { return t.value == "wait" || t.value == "waitNext"; })) {
-			add(parseWaitStatement(toks2));
-		} else if (toks2.first().value == "state") {
-			add(parseStateDeclaration(toks2));
-		} else if (toks2.first().value == "switch" && toks2.any([&](const Token& t) { return t.value == "return"; })) {
-			throw Error(toks2.first().sourceLine, "Unsupported compound statement containing return.");
-		} else if (toks2.first().value.starts_with("#")) {
-			throw Error(toks2.first().sourceLine,
+		if (toks.any([&](const Token& t) { return t.value == "wait" || t.value == "waitNext"; })) {
+			add(parseWaitStatement(toks));
+		} else if (toks.first().value == "state") {
+			add(parseStateDeclaration(toks));
+		} else if (toks.first().value == "switch" && toks.any([&](const Token& t) { return t.value == "return"; })) {
+			throw Error(toks.first().sourceLine, "Unsupported compound statement containing return.");
+		} else if (toks.first().value.starts_with("#")) {
+			throw Error(toks.first().sourceLine,
 			            std::format("Found \"{}\". Preprocessor directives are not supported within ACTORs",
-			                        toks2.first().value));
-		} else if (toks2.RevSkipWhile([&](const Token& t) { return t.value == ";"; }).any(NonWhitespace)) {
+			                        toks.first().value));
+		} else if (toks.RevSkipWhile([&](const Token& t) { return t.value == ";"; }).any(NonWhitespace)) {
 			add(std::make_shared<PlainOldCodeStatement>(
-			    str(normalizeWhitespace(toks2.RevSkipWhile([&](const Token& t) { return t.value == ";"; }))) + ";"));
+			    str(normalizeWhitespace(toks.RevSkipWhile([&](const Token& t) { return t.value == ";"; }))) + ";"));
 		}
 	}
 }
 
-std::shared_ptr<Statement> ActorParser::parseCompoundStatement(const TokenRange& toks) const {
+std::shared_ptr<Statement> ActorParser::parseCompoundStatement(TokenRange toks) const {
 	auto first = toks.first(NonWhitespace).value();
 	if (first.value == "{") {
 		auto inBraces = first.getMatchingRangeIn(toks);
@@ -836,41 +831,39 @@ std::shared_ptr<Statement> ActorParser::parseCompoundStatement(const TokenRange&
 	}
 }
 
-std::vector<Declaration> ActorParser::parseDescrCodeBlock(const TokenRange& toks) const {
+std::vector<Declaration> ActorParser::parseDescrCodeBlock(TokenRange toks) const {
 	std::vector<Declaration> declarations;
-	TokenRange toks2 = toks;
 	while (true) {
-		auto delim = toks2.first([&](const Token& t) { return t.value == ";"; });
+		auto delim = toks.first([&](const Token& t) { return t.value == ";"; });
 		if (!delim.has_value())
 			break;
 		int pos = delim.value().position + 1;
 		auto potentialComment =
-		    range(pos, toks2.end()).SkipWhile([&](const Token& t) { return t.value == "\t" || t.value == " "; });
+		    range(pos, toks.end()).SkipWhile([&](const Token& t) { return t.value == "\t" || t.value == " "; });
 		if (!potentialComment.empty() && potentialComment.first().value.starts_with("//"))
 			pos = potentialComment.first().position + 1;
-		parseDeclaration(range(toks2.begin(), pos), declarations);
-		toks2 = range(pos, toks2.end());
+		parseDeclaration(range(toks.begin(), pos), declarations);
+		toks = range(pos, toks.end());
 	}
-	if (!toks2.all(Whitespace))
+	if (!toks.all(Whitespace))
 		throw Error(toks.first(NonWhitespace).value().sourceLine, "Trailing unterminated statement in code block");
 	return declarations;
 }
 
-std::shared_ptr<CodeBlock> ActorParser::parseCodeBlock(const TokenRange& toks) const {
+std::shared_ptr<CodeBlock> ActorParser::parseCodeBlock(TokenRange toks) const {
 	std::vector<std::shared_ptr<Statement>> statements;
-	TokenRange toks2 = toks;
 	while (true) {
-		std::optional<Token> delim = toks2.first([&](const Token& t) {
-			return t.parenDepth == toks2.first().parenDepth && t.braceDepth == toks2.first().braceDepth &&
+		std::optional<Token> delim = toks.first([&](const Token& t) {
+			return t.parenDepth == toks.first().parenDepth && t.braceDepth == toks.first().braceDepth &&
 			       (t.value == ";" || t.value == "}");
 		});
 		if (!delim.has_value())
 			break;
 		parseStatement(range(toks.begin(), delim.value().position + 1), statements);
-		toks2 = range(delim.value().position + 1, toks2.end());
+		toks = range(delim.value().position + 1, toks.end());
 	}
-	if (!toks2.all(Whitespace))
-		throw Error(toks2.first(NonWhitespace).value().sourceLine, "Trailing unterminated statement in code block");
+	if (!toks.all(Whitespace))
+		throw Error(toks.first(NonWhitespace).value().sourceLine, "Trailing unterminated statement in code block");
 	return std::make_shared<CodeBlock>(statements);
 }
 

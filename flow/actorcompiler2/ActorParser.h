@@ -91,7 +91,7 @@ public:
 
 	Token Assert(const std::string& error, std::function<bool(const Token&)> pred) const;
 
-	TokenRange getMatchingRangeIn(const TokenRange& range) const;
+	TokenRange getMatchingRangeIn(TokenRange range) const;
 };
 
 // TokenRange class
@@ -284,64 +284,64 @@ public:
 
 	void write(std::ostream& writer, const std::string& destFileName);
 
-	std::vector<TokenRange> splitParameterList(const TokenRange& toks, const std::string& delimiter) const;
+	std::vector<TokenRange> splitParameterList(TokenRange toks, const std::string& delimiter) const;
 
 	std::vector<Token> normalizeWhitespace(const std::vector<Token>& tokens) const;
 	std::vector<Token> normalizeWhitespace(const TokenRange& tokens) const;
 
-	void parseDeclaration(const TokenRange& tokens,
+	void parseDeclaration(TokenRange tokens,
 	                      Token& name,
 	                      TokenRange& type,
 	                      TokenRange& initializer,
 	                      bool& constructorSyntax) const;
 
-	VarDeclaration parseVarDeclaration(const TokenRange& tokens) const;
+	VarDeclaration parseVarDeclaration(TokenRange tokens) const;
 
 	std::function<bool(const Token&)> Whitespace = [](const Token& t) { return t.isWhitespace(); };
 	std::function<bool(const Token&)> NonWhitespace = [](const Token& t) { return !t.isWhitespace(); };
 
-	void parseDescrHeading(Descr& descr, const TokenRange& toks) const;
+	void parseDescrHeading(Descr& descr, TokenRange toks) const;
 
-	void parseTestCaseHeading(Actor& actor, const TokenRange& toks) const;
+	void parseTestCaseHeading(Actor& actor, TokenRange toks) const;
 
-	void parseActorHeading(Actor& actor, const TokenRange& toks) const;
+	void parseActorHeading(Actor& actor, TokenRange toks) const;
 
-	std::shared_ptr<LoopStatement> parseLoopStatement(const TokenRange& toks) const;
+	std::shared_ptr<LoopStatement> parseLoopStatement(TokenRange toks) const;
 
-	std::shared_ptr<ChooseStatement> parseChooseStatement(const TokenRange& toks) const;
+	std::shared_ptr<ChooseStatement> parseChooseStatement(TokenRange toks) const;
 
-	std::shared_ptr<WhenStatement> parseWhenStatement(const TokenRange& toks) const;
+	std::shared_ptr<WhenStatement> parseWhenStatement(TokenRange toks) const;
 
-	std::shared_ptr<StateDeclarationStatement> parseStateDeclaration(const TokenRange& toks) const;
+	std::shared_ptr<StateDeclarationStatement> parseStateDeclaration(TokenRange toks) const;
 
-	std::shared_ptr<ReturnStatement> parseReturnStatement(const TokenRange& toks) const;
+	std::shared_ptr<ReturnStatement> parseReturnStatement(TokenRange toks) const;
 
-	std::shared_ptr<ThrowStatement> parseThrowStatement(const TokenRange& toks) const;
+	std::shared_ptr<ThrowStatement> parseThrowStatement(TokenRange toks) const;
 
-	std::shared_ptr<WaitStatement> parseWaitStatement(const TokenRange& toks) const;
+	std::shared_ptr<WaitStatement> parseWaitStatement(TokenRange toks) const;
 
-	std::shared_ptr<WhileStatement> parseWhileStatement(const TokenRange& toks) const;
+	std::shared_ptr<WhileStatement> parseWhileStatement(TokenRange toks) const;
 
-	std::shared_ptr<Statement> parseForStatement(const TokenRange& toks) const;
+	std::shared_ptr<Statement> parseForStatement(TokenRange toks) const;
 
-	std::shared_ptr<Statement> parseIfStatement(const TokenRange& toks) const;
+	std::shared_ptr<Statement> parseIfStatement(TokenRange toks) const;
 
-	void parseElseStatement(const TokenRange& toks, const std::shared_ptr<Statement>& prevStatement) const;
+	void parseElseStatement(TokenRange toks, const std::shared_ptr<Statement>& prevStatement) const;
 
-	std::shared_ptr<Statement> parseTryStatement(const TokenRange& toks) const;
+	std::shared_ptr<Statement> parseTryStatement(TokenRange toks) const;
 
-	void parseCatchStatement(const TokenRange& toks, const std::shared_ptr<Statement>& prevStatement) const;
+	void parseCatchStatement(TokenRange toks, const std::shared_ptr<Statement>& prevStatement) const;
 
 	static std::set<std::string> illegalKeywords;
 
-	void parseDeclaration(const TokenRange& toks, std::vector<Declaration>& declarations) const;
+	void parseDeclaration(TokenRange toks, std::vector<Declaration>& declarations) const;
 
-	void parseStatement(const TokenRange& toks, std::vector<std::shared_ptr<Statement>>& statements) const;
+	void parseStatement(TokenRange toks, std::vector<std::shared_ptr<Statement>>& statements) const;
 
-	std::shared_ptr<Statement> parseCompoundStatement(const TokenRange& toks) const;
+	std::shared_ptr<Statement> parseCompoundStatement(TokenRange toks) const;
 
-	std::vector<Declaration> parseDescrCodeBlock(const TokenRange& toks) const;
-	std::shared_ptr<CodeBlock> parseCodeBlock(const TokenRange& toks) const;
+	std::vector<Declaration> parseDescrCodeBlock(TokenRange toks) const;
+	std::shared_ptr<CodeBlock> parseCodeBlock(TokenRange toks) const;
 
 	TokenRange range(int beginPos, int endPos) const { return TokenRange(tokens, beginPos, endPos); }
 
@@ -359,7 +359,7 @@ public:
 
 private:
 	std::vector<boost::regex> initializeTokenExpressions();
-	bool parseClassContext(const TokenRange& toks, std::string& name) const;
+	bool parseClassContext(TokenRange toks, std::string& name) const;
 	std::string trim(const std::string& str) const;
 	std::string trimStart(const std::string& str, const std::string& chars) const {
 		auto firstNonChar = str.find_first_not_of(chars);

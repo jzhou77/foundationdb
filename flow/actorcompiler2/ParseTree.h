@@ -52,7 +52,7 @@ public:
 	int firstSourceLine;
 	virtual bool containsWait() const { return false; }
 	virtual ~Statement() = default;
-	virtual std::string toString() const { return ""; }
+	virtual std::string toString() const { return "[Statement]"; }
 };
 
 class PlainOldCodeStatement : public Statement {
@@ -60,7 +60,7 @@ public:
 	std::string code;
 	PlainOldCodeStatement(std::string code) : code(code) {}
 
-	std::string toString() const override { return code; }
+	std::string toString() const override { return "[PlainOld]: " + code; }
 };
 
 class StateDeclarationStatement : public Statement {
@@ -83,6 +83,7 @@ public:
 	WhileStatement(std::string expression, std::shared_ptr<Statement> body) : expression(expression), body(body) {}
 
 	bool containsWait() const override { return body->containsWait(); }
+	std::string toString() const override { return "[While] " + expression + " " + body->toString(); }
 };
 
 class ForStatement : public Statement {
@@ -99,6 +100,9 @@ public:
 	  : initExpression(initExpression), condExpression(condExpression), nextExpression(nextExpression), body(body) {}
 
 	bool containsWait() const override { return body->containsWait(); }
+	std::string toString() const override {
+		return "[For] " + initExpression + "; " + condExpression + "; " + nextExpression + " " + body->toString();
+	}
 };
 
 class RangeForStatement : public Statement {
@@ -110,6 +114,9 @@ public:
 	RangeForStatement(std::string rangeExpression, std::string rangeDecl, std::shared_ptr<Statement> body)
 	  : rangeExpression(rangeExpression), rangeDecl(rangeDecl), body(body) {}
 	bool containsWait() const override { return body->containsWait(); }
+	std::string toString() const override {
+		return "[RangeFor] " + rangeDecl + " : " + rangeExpression + " " + body->toString();
+	}
 };
 
 class LoopStatement : public Statement {
@@ -117,13 +124,19 @@ public:
 	std::shared_ptr<Statement> body;
 	LoopStatement(std::shared_ptr<Statement> body) : body(body) {}
 
-	std::string toString() const override { return "Loop " + body->toString(); }
+	std::string toString() const override { return "[Loop] " + body->toString(); }
 	bool containsWait() const override { return body->containsWait(); }
 };
 
-class BreakStatement : public Statement {};
+class BreakStatement : public Statement {
+public:
+	std::string toString() const override { return "[Break]"; }
+};
 
-class ContinueStatement : public Statement {};
+class ContinueStatement : public Statement {
+public:
+	std::string toString() const override { return "[Continue]"; }
+};
 
 class IfStatement : public Statement {
 public:
@@ -138,6 +151,12 @@ public:
 	            std::shared_ptr<Statement> elseBody)
 	  : expression(expression), _constexpr(_constexpr), ifBody(ifBody), elseBody(elseBody) {}
 
+	std::string toString() const override {
+		std::string result = "[If] " + expression + " " + ifBody->toString();
+		if (elseBody)
+			result += " else " + elseBody->toString();
+		return result;
+	}
 	bool containsWait() const override { return ifBody->containsWait() || (elseBody && elseBody->containsWait()); }
 };
 
@@ -146,7 +165,7 @@ public:
 	std::string expression;
 	ReturnStatement(std::string expression) : expression(expression) {}
 
-	std::string toString() const override { return "Return " + expression; }
+	std::string toString() const override { return "[Return] " + expression; }
 };
 
 class WaitStatement : public Statement {
@@ -156,7 +175,7 @@ public:
 	bool resultIsState;
 	bool isWaitNext;
 	std::string toString() const override {
-		return "Wait " + result.type + " " + result.name + " <- " + futureExpression + " (" +
+		return "[Wait] " + result.type + " " + result.name + " <- " + futureExpression + " (" +
 		       (resultIsState ? "state" : "local") + ")";
 	}
 	bool containsWait() const override { return true; }
@@ -167,7 +186,7 @@ public:
 	ChooseStatement(std::shared_ptr<Statement> body) : body(body) {}
 
 	std::shared_ptr<Statement> body;
-	std::string toString() const override { return "Choose " + body->toString(); }
+	std::string toString() const override { return "[Choose] " + body->toString(); }
 	bool containsWait() const override { return body->containsWait(); }
 };
 
@@ -177,7 +196,7 @@ public:
 	std::shared_ptr<Statement> body;
 	WhenStatement(std::shared_ptr<WaitStatement> wait, std::shared_ptr<Statement> body) : wait(wait), body(body) {}
 
-	std::string toString() const override { return "When (" + wait->toString() + ") " + body->toString(); }
+	std::string toString() const override { return "[When] (" + wait->toString() + ") " + body->toString(); }
 	bool containsWait() const override { return true; }
 };
 
@@ -202,12 +221,20 @@ public:
 				return true;
 		return false;
 	}
+	std::string toString() const override {
+		std::string result = "[Try] " + tryBody->toString();
+		for (const auto& c : catches) {
+			result += "\n[CATCH] " + c.expression + " " + c.body->toString();
+		}
+		return result;
+	}
 };
 
 class ThrowStatement : public Statement {
 public:
 	ThrowStatement(std::string expression) : expression(expression) {}
 	std::string expression;
+	std::string toString() const override { return "[Throw] " + expression; }
 };
 
 class CodeBlock : public Statement {
@@ -218,7 +245,7 @@ public:
 	std::vector<std::shared_ptr<Statement>> statements;
 
 	std::string toString() const override {
-		std::string result = "CodeBlock\n";
+		std::string result = "[CodeBlock]\n";
 		for (const auto& s : statements) {
 			result += s->toString() + "\n";
 		}

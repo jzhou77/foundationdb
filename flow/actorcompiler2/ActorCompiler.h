@@ -337,24 +337,24 @@ public:
 	~ActorCompiler() {}
 
 	// Code generation methods
-	void CompilePlainStatement(const std::shared_ptr<PlainOldCodeStatement> stmt, Context& cx);
-	void CompileStateDeclStatement(const std::shared_ptr<StateDeclarationStatement> stmt, Context& cx);
-	void CompileForStatement(const std::shared_ptr<ForStatement> stmt, Context& cx);
-	void CompileLoopStatement(const std::shared_ptr<LoopStatement> stmt, Context& cx);
-	void CompileChooseStatement(const std::shared_ptr<ChooseStatement> stmt, Context& cx);
-	void CompileWhenStatement(const std::shared_ptr<ChooseStatement> stmt, Context& cx);
-	void CompileWhileStatement(const std::shared_ptr<WhileStatement> stmt, Context& cx);
-	void CompileRangeForStatement(const std::shared_ptr<RangeForStatement> stmt, Context& cx);
-	void CompileBreakStatement(const std::shared_ptr<BreakStatement>& stmt, Context& cx);
-	void CompileContinueStatement(const std::shared_ptr<ContinueStatement>& stmt, Context& cx);
-	void CompileWaitStatement(const std::shared_ptr<WaitStatement>& stmt, Context& cx);
-	void CompileCodeBlockStatement(const std::shared_ptr<CodeBlock>& stmt, Context& cx);
-	void CompileReturnStatement(const std::shared_ptr<ReturnStatement>& stmt, Context& cx);
-	void CompileIfStatement(const std::shared_ptr<IfStatement>& stmt, Context& cx);
-	void CompileTryStatement(const std::shared_ptr<TryStatement>& stmt, Context& cx);
-	void CompileThrowStatement(const std::shared_ptr<ThrowStatement>& stmt, Context& cx);
+	void CompilePlainStatement(const std::shared_ptr<PlainOldCodeStatement> stmt, Context cx);
+	void CompileStateDeclStatement(const std::shared_ptr<StateDeclarationStatement> stmt, Context cx);
+	void CompileForStatement(const std::shared_ptr<ForStatement> stmt, Context cx);
+	void CompileLoopStatement(const std::shared_ptr<LoopStatement> stmt, Context cx);
+	void CompileChooseStatement(const std::shared_ptr<ChooseStatement> stmt, Context cx);
+	void CompileWhenStatement(const std::shared_ptr<ChooseStatement> stmt, Context cx);
+	void CompileWhileStatement(const std::shared_ptr<WhileStatement> stmt, Context cx);
+	void CompileRangeForStatement(const std::shared_ptr<RangeForStatement> stmt, Context cx);
+	void CompileBreakStatement(const std::shared_ptr<BreakStatement>& stmt, Context cx);
+	void CompileContinueStatement(const std::shared_ptr<ContinueStatement>& stmt, Context cx);
+	void CompileWaitStatement(const std::shared_ptr<WaitStatement>& stmt, Context cx);
+	void CompileCodeBlockStatement(const std::shared_ptr<CodeBlock>& stmt, Context cx);
+	void CompileReturnStatement(const std::shared_ptr<ReturnStatement>& stmt, Context cx);
+	void CompileIfStatement(const std::shared_ptr<IfStatement>& stmt, Context cx);
+	void CompileTryStatement(const std::shared_ptr<TryStatement>& stmt, Context cx);
+	void CompileThrowStatement(const std::shared_ptr<ThrowStatement>& stmt, Context cx);
 
-	void CompileStatement(const std::shared_ptr<Statement>& stmt, Context& cx);
+	void CompileStatement(const std::shared_ptr<Statement>& stmt, Context cx);
 
 	// Compile returns a new context based on the one that is passed in, but (unlike CompileStatement)
 	//   does not modify its parameter
@@ -376,13 +376,13 @@ public:
 	void WriteFunctions(std::ostream& writer);
 	void WriteFunction(std::ostream& writer, Function& func, const std::string& body);
 
-	Function getFunction(const std::string& baseName,
-	                     const std::string& addName,
-	                     const std::vector<std::string>& formalParameters,
-	                     const std::vector<std::string>& overloadFormalParameters);
-	Function getFunction(const std::string& baseName,
-	                     const std::string& addName,
-	                     const std::vector<std::string>& formalParameters);
+	Function& getFunction(const std::string& baseName,
+	                      const std::string& addName,
+	                      const std::vector<std::string>& formalParameters,
+	                      const std::vector<std::string>& overloadFormalParameters);
+	Function& getFunction(const std::string& baseName,
+	                      const std::string& addName,
+	                      const std::vector<std::string>& formalParameters);
 	std::vector<std::string> ParameterList();
 
 	// Utility methods
@@ -440,7 +440,7 @@ private:
 	std::map<std::string, int> iterators;
 
 	std::string getIteratorName(Context cx);
-	bool EmitNativeLoop(int sourceLine, const std::string& head, std::shared_ptr<Statement> body, Context& cx);
+	bool EmitNativeLoop(int sourceLine, const std::string& head, std::shared_ptr<Statement> body, Context cx);
 
 	// Helper methods
 	void FindState();
