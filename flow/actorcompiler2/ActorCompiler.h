@@ -285,11 +285,11 @@ public:
 // Context for compilation
 class Context {
 public:
-	std::optional<Function> target;
-	std::optional<Function> next;
-	std::optional<Function> breakF;
-	std::optional<Function> continueF;
-	std::optional<Function> catchFErr;
+	std::shared_ptr<Function> target;
+	std::shared_ptr<Function> next;
+	std::shared_ptr<Function> breakF;
+	std::shared_ptr<Function> continueF;
+	std::shared_ptr<Function> catchFErr;
 	// The number of (loopDepth-increasing) loops entered inside the innermost
 	// try (thus, that will be exited by a throw)
 	int tryLoopDepth = -1;
@@ -299,32 +299,32 @@ public:
 
 	Context Clone() const { return Context(*this); }
 
-	Context WithTarget(const Function& t) const {
+	Context WithTarget(std::shared_ptr<Function> t) const {
 		Context cx = Clone();
 		cx.target = t;
-		cx.next = std::nullopt;
+		cx.next.reset();
 		return cx;
 	}
 
-	Context LoopContext(const Function& newTarget,
-	                    const Function newBreakF,
-	                    const Function newContinueF,
+	Context LoopContext(std::shared_ptr<Function> newTarget,
+	                    std::shared_ptr<Function> newBreakF,
+	                    std::shared_ptr<Function> newContinueF,
 	                    int deltaLoopDepth) {
 		Context cx(*this);
-		cx.next = std::nullopt;
+		cx.next.reset();
 		cx.tryLoopDepth = tryLoopDepth + deltaLoopDepth;
 		return cx;
 	}
 
-	Context WithCatch(const Function& newCatchFErr) const {
+	Context WithCatch(std::shared_ptr<Function> newCatchFErr) const {
 		Context cx(*this);
-		cx.next = std::nullopt;
+		cx.next.reset();
 		cx.catchFErr = newCatchFErr;
 		cx.tryLoopDepth = 0;
 		return cx;
 	}
 
-	void unreachable() { target = std::nullopt; }
+	void unreachable() { target.reset(); }
 };
 
 class ActorCompiler {
@@ -376,13 +376,13 @@ public:
 	void WriteFunctions(std::ostream& writer);
 	void WriteFunction(std::ostream& writer, Function& func, const std::string& body);
 
-	Function& getFunction(const std::string& baseName,
-	                      const std::string& addName,
-	                      const std::vector<std::string>& formalParameters,
-	                      const std::vector<std::string>& overloadFormalParameters);
-	Function& getFunction(const std::string& baseName,
-	                      const std::string& addName,
-	                      const std::vector<std::string>& formalParameters);
+	std::shared_ptr<Function> getFunction(const std::string& baseName,
+	                                      const std::string& addName,
+	                                      const std::vector<std::string>& formalParameters,
+	                                      const std::vector<std::string>& overloadFormalParameters);
+	std::shared_ptr<Function> getFunction(const std::string& baseName,
+	                                      const std::string& addName,
+	                                      const std::vector<std::string>& formalParameters);
 	std::vector<std::string> ParameterList();
 
 	// Utility methods
@@ -393,7 +393,7 @@ public:
 	std::shared_ptr<CodeBlock> AsCodeBlock(std::shared_ptr<Statement> stmt);
 
 	static void TryCatch(Context cx,
-	                     std::optional<Function> catchFErr,
+	                     std::shared_ptr<Function> catchFErr,
 	                     int catchLoopDepth,
 	                     std::function<void()> action,
 	                     bool useLoopDepth = true);
@@ -436,7 +436,7 @@ private:
 	std::string This;
 	bool generateProbes;
 
-	std::map<std::string, Function> functions;
+	std::map<std::string, std::shared_ptr<Function>> functions;
 	std::map<std::string, int> iterators;
 
 	std::string getIteratorName(Context cx);
