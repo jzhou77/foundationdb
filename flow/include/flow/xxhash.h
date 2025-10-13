@@ -2187,6 +2187,11 @@ XXH_PUBLIC_API XXH64_hash_t XXH64_hashFromCanonical(const XXH64_canonical_t* src
 #warning "XXH3 is highly inefficient without ARM or Thumb-2."
 #endif
 
+// Force x86 dispatch if AVX2 or AVX512 are enabled
+#if defined(__AVX2__) || defined(__AVX512F__)
+#define XXH_X86DISPATCH
+#endif
+
 /* ==========================================
  * Vectorization detection
  * ========================================== */
@@ -3009,31 +3014,9 @@ typedef long long xxh_i64;
 #define XXH_TARGET_AVX512 /* disable attribute target */
 #endif
 
-XXH_FORCE_INLINE XXH_TARGET_AVX512 void XXH3_accumulate_512_avx512(void* XXH_RESTRICT acc,
-                                                                   const void* XXH_RESTRICT input,
-                                                                   const void* XXH_RESTRICT secret) {
-	XXH_ALIGN(64) __m512i* const xacc = (__m512i*)acc;
-	XXH_ASSERT((((size_t)acc) & 63) == 0);
-	XXH_STATIC_ASSERT(XXH_STRIPE_LEN == sizeof(__m512i));
-
-	{
-		/* data_vec    = input[0]; */
-		__m512i const data_vec = _mm512_loadu_si512(input);
-		/* key_vec     = secret[0]; */
-		__m512i const key_vec = _mm512_loadu_si512(secret);
-		/* data_key    = data_vec ^ key_vec; */
-		__m512i const data_key = _mm512_xor_si512(data_vec, key_vec);
-		/* data_key_lo = data_key >> 32; */
-		__m512i const data_key_lo = _mm512_shuffle_epi32(data_key, (_MM_PERM_ENUM)_MM_SHUFFLE(0, 3, 0, 1));
-		/* product     = (data_key & 0xffffffff) * (data_key_lo & 0xffffffff); */
-		__m512i const product = _mm512_mul_epu32(data_key, data_key_lo);
-		/* xacc[0] += swap(data_vec); */
-		__m512i const data_swap = _mm512_shuffle_epi32(data_vec, (_MM_PERM_ENUM)_MM_SHUFFLE(1, 0, 3, 2));
-		__m512i const sum = _mm512_add_epi64(*xacc, data_swap);
-		/* xacc[0] += product; */
-		*xacc = _mm512_add_epi64(product, sum);
-	}
-}
+extern void XXH3_accumulate_512_avx512(void* XXH_RESTRICT acc,
+                                       const void* XXH_RESTRICT input,
+                                       const void* XXH_RESTRICT secret);
 
 /*
  * XXH3_scrambleAcc: Scrambles the accumulators to improve mixing.
@@ -3056,54 +3039,9 @@ XXH_FORCE_INLINE XXH_TARGET_AVX512 void XXH3_accumulate_512_avx512(void* XXH_RES
  * Both XXH3_64bits and XXH3_128bits use this subroutine.
  */
 
-XXH_FORCE_INLINE XXH_TARGET_AVX512 void XXH3_scrambleAcc_avx512(void* XXH_RESTRICT acc,
-                                                                const void* XXH_RESTRICT secret) {
-	XXH_ASSERT((((size_t)acc) & 63) == 0);
-	XXH_STATIC_ASSERT(XXH_STRIPE_LEN == sizeof(__m512i));
-	{
-		XXH_ALIGN(64) __m512i* const xacc = (__m512i*)acc;
-		const __m512i prime32 = _mm512_set1_epi32((int)XXH_PRIME32_1);
+extern void XXH3_scrambleAcc_avx512(void* XXH_RESTRICT acc, const void* XXH_RESTRICT secret);
 
-		/* xacc[0] ^= (xacc[0] >> 47) */
-		__m512i const acc_vec = *xacc;
-		__m512i const shifted = _mm512_srli_epi64(acc_vec, 47);
-		__m512i const data_vec = _mm512_xor_si512(acc_vec, shifted);
-		/* xacc[0] ^= secret; */
-		__m512i const key_vec = _mm512_loadu_si512(secret);
-		__m512i const data_key = _mm512_xor_si512(data_vec, key_vec);
-
-		/* xacc[0] *= XXH_PRIME32_1; */
-		__m512i const data_key_hi = _mm512_shuffle_epi32(data_key, (_MM_PERM_ENUM)_MM_SHUFFLE(0, 3, 0, 1));
-		__m512i const prod_lo = _mm512_mul_epu32(data_key, prime32);
-		__m512i const prod_hi = _mm512_mul_epu32(data_key_hi, prime32);
-		*xacc = _mm512_add_epi64(prod_lo, _mm512_slli_epi64(prod_hi, 32));
-	}
-}
-
-XXH_FORCE_INLINE XXH_TARGET_AVX512 void XXH3_initCustomSecret_avx512(void* XXH_RESTRICT customSecret, xxh_u64 seed64) {
-	XXH_STATIC_ASSERT((XXH_SECRET_DEFAULT_SIZE & 63) == 0);
-	XXH_STATIC_ASSERT(XXH_SEC_ALIGN == 64);
-	XXH_ASSERT(((size_t)customSecret & 63) == 0);
-	(void)(&XXH_writeLE64);
-	{
-		int const nbRounds = XXH_SECRET_DEFAULT_SIZE / sizeof(__m512i);
-		__m512i const seed = _mm512_mask_set1_epi64(_mm512_set1_epi64((xxh_i64)seed64), 0xAA, -(xxh_i64)seed64);
-
-		XXH_ALIGN(64) const __m512i* const src = (const __m512i*)XXH3_kSecret;
-		XXH_ALIGN(64) __m512i* const dest = (__m512i*)customSecret;
-		int i;
-		for (i = 0; i < nbRounds; ++i) {
-			/* GCC has a bug, _mm512_stream_load_si512 accepts 'void*', not 'void const*',
-			 * this will warn "discards ‘const’ qualifier". */
-			union {
-				XXH_ALIGN(64) const __m512i* cp;
-				XXH_ALIGN(64) void* p;
-			} remote_const_void;
-			remote_const_void.cp = src + i;
-			dest[i] = _mm512_add_epi64(_mm512_stream_load_si512(remote_const_void.p), seed);
-		}
-	}
-}
+extern void XXH3_initCustomSecret_avx512(void* XXH_RESTRICT customSecret, xxh_u64 seed64);
 
 #endif
 
@@ -3113,102 +3051,13 @@ XXH_FORCE_INLINE XXH_TARGET_AVX512 void XXH3_initCustomSecret_avx512(void* XXH_R
 #define XXH_TARGET_AVX2 /* disable attribute target */
 #endif
 
-XXH_FORCE_INLINE XXH_TARGET_AVX2 void XXH3_accumulate_512_avx2(void* XXH_RESTRICT acc,
-                                                               const void* XXH_RESTRICT input,
-                                                               const void* XXH_RESTRICT secret) {
-	XXH_ASSERT((((size_t)acc) & 31) == 0);
-	{
-		XXH_ALIGN(32) __m256i* const xacc = (__m256i*)acc;
-		/* Unaligned. This is mainly for pointer arithmetic, and because
-		 * _mm256_loadu_si256 requires  a const __m256i * pointer for some reason. */
-		const __m256i* const xinput = (const __m256i*)input;
-		/* Unaligned. This is mainly for pointer arithmetic, and because
-		 * _mm256_loadu_si256 requires a const __m256i * pointer for some reason. */
-		const __m256i* const xsecret = (const __m256i*)secret;
+extern void XXH3_accumulate_512_avx2(void* XXH_RESTRICT acc,
+                                     const void* XXH_RESTRICT input,
+                                     const void* XXH_RESTRICT secret);
 
-		size_t i;
-		for (i = 0; i < XXH_STRIPE_LEN / sizeof(__m256i); i++) {
-			/* data_vec    = xinput[i]; */
-			__m256i const data_vec = _mm256_loadu_si256(xinput + i);
-			/* key_vec     = xsecret[i]; */
-			__m256i const key_vec = _mm256_loadu_si256(xsecret + i);
-			/* data_key    = data_vec ^ key_vec; */
-			__m256i const data_key = _mm256_xor_si256(data_vec, key_vec);
-			/* data_key_lo = data_key >> 32; */
-			__m256i const data_key_lo = _mm256_shuffle_epi32(data_key, _MM_SHUFFLE(0, 3, 0, 1));
-			/* product     = (data_key & 0xffffffff) * (data_key_lo & 0xffffffff); */
-			__m256i const product = _mm256_mul_epu32(data_key, data_key_lo);
-			/* xacc[i] += swap(data_vec); */
-			__m256i const data_swap = _mm256_shuffle_epi32(data_vec, _MM_SHUFFLE(1, 0, 3, 2));
-			__m256i const sum = _mm256_add_epi64(xacc[i], data_swap);
-			/* xacc[i] += product; */
-			xacc[i] = _mm256_add_epi64(product, sum);
-		}
-	}
-}
+extern void XXH3_scrambleAcc_avx2(void* XXH_RESTRICT acc, const void* XXH_RESTRICT secret);
 
-XXH_FORCE_INLINE XXH_TARGET_AVX2 void XXH3_scrambleAcc_avx2(void* XXH_RESTRICT acc, const void* XXH_RESTRICT secret) {
-	XXH_ASSERT((((size_t)acc) & 31) == 0);
-	{
-		XXH_ALIGN(32) __m256i* const xacc = (__m256i*)acc;
-		/* Unaligned. This is mainly for pointer arithmetic, and because
-		 * _mm256_loadu_si256 requires a const __m256i * pointer for some reason. */
-		const __m256i* const xsecret = (const __m256i*)secret;
-		const __m256i prime32 = _mm256_set1_epi32((int)XXH_PRIME32_1);
-
-		size_t i;
-		for (i = 0; i < XXH_STRIPE_LEN / sizeof(__m256i); i++) {
-			/* xacc[i] ^= (xacc[i] >> 47) */
-			__m256i const acc_vec = xacc[i];
-			__m256i const shifted = _mm256_srli_epi64(acc_vec, 47);
-			__m256i const data_vec = _mm256_xor_si256(acc_vec, shifted);
-			/* xacc[i] ^= xsecret; */
-			__m256i const key_vec = _mm256_loadu_si256(xsecret + i);
-			__m256i const data_key = _mm256_xor_si256(data_vec, key_vec);
-
-			/* xacc[i] *= XXH_PRIME32_1; */
-			__m256i const data_key_hi = _mm256_shuffle_epi32(data_key, _MM_SHUFFLE(0, 3, 0, 1));
-			__m256i const prod_lo = _mm256_mul_epu32(data_key, prime32);
-			__m256i const prod_hi = _mm256_mul_epu32(data_key_hi, prime32);
-			xacc[i] = _mm256_add_epi64(prod_lo, _mm256_slli_epi64(prod_hi, 32));
-		}
-	}
-}
-
-XXH_FORCE_INLINE XXH_TARGET_AVX2 void XXH3_initCustomSecret_avx2(void* XXH_RESTRICT customSecret, xxh_u64 seed64) {
-	XXH_STATIC_ASSERT((XXH_SECRET_DEFAULT_SIZE & 31) == 0);
-	XXH_STATIC_ASSERT((XXH_SECRET_DEFAULT_SIZE / sizeof(__m256i)) == 6);
-	XXH_STATIC_ASSERT(XXH_SEC_ALIGN <= 64);
-	(void)(&XXH_writeLE64);
-	XXH_PREFETCH(customSecret);
-	{
-		__m256i const seed = _mm256_set_epi64x(-(xxh_i64)seed64, (xxh_i64)seed64, -(xxh_i64)seed64, (xxh_i64)seed64);
-
-		XXH_ALIGN(64) const __m256i* const src = (const __m256i*)XXH3_kSecret;
-		XXH_ALIGN(64) __m256i* dest = (__m256i*)customSecret;
-
-#if defined(__GNUC__) || defined(__clang__)
-		/*
-		 * On GCC & Clang, marking 'dest' as modified will cause the compiler:
-		 *   - do not extract the secret from sse registers in the internal loop
-		 *   - use less common registers, and avoid pushing these reg into stack
-		 * The asm hack causes Clang to assume that XXH3_kSecretPtr aliases with
-		 * customSecret, and on aarch64, this prevented LDP from merging two
-		 * loads together for free. Putting the loads together before the stores
-		 * properly generates LDP.
-		 */
-		__asm__("" : "+r"(dest));
-#endif
-
-		/* GCC -O2 need unroll loop manually */
-		dest[0] = _mm256_add_epi64(_mm256_stream_load_si256(src + 0), seed);
-		dest[1] = _mm256_add_epi64(_mm256_stream_load_si256(src + 1), seed);
-		dest[2] = _mm256_add_epi64(_mm256_stream_load_si256(src + 2), seed);
-		dest[3] = _mm256_add_epi64(_mm256_stream_load_si256(src + 3), seed);
-		dest[4] = _mm256_add_epi64(_mm256_stream_load_si256(src + 4), seed);
-		dest[5] = _mm256_add_epi64(_mm256_stream_load_si256(src + 5), seed);
-	}
-}
+extern void XXH3_initCustomSecret_avx2(void* XXH_RESTRICT customSecret, xxh_u64 seed64);
 
 #endif
 
@@ -3218,100 +3067,13 @@ XXH_FORCE_INLINE XXH_TARGET_AVX2 void XXH3_initCustomSecret_avx2(void* XXH_RESTR
 #define XXH_TARGET_SSE2 /* disable attribute target */
 #endif
 
-XXH_FORCE_INLINE XXH_TARGET_SSE2 void XXH3_accumulate_512_sse2(void* XXH_RESTRICT acc,
-                                                               const void* XXH_RESTRICT input,
-                                                               const void* XXH_RESTRICT secret) {
-	/* SSE2 is just a half-scale version of the AVX2 version. */
-	XXH_ASSERT((((size_t)acc) & 15) == 0);
-	{
-		XXH_ALIGN(16) __m128i* const xacc = (__m128i*)acc;
-		/* Unaligned. This is mainly for pointer arithmetic, and because
-		 * _mm_loadu_si128 requires a const __m128i * pointer for some reason. */
-		const __m128i* const xinput = (const __m128i*)input;
-		/* Unaligned. This is mainly for pointer arithmetic, and because
-		 * _mm_loadu_si128 requires a const __m128i * pointer for some reason. */
-		const __m128i* const xsecret = (const __m128i*)secret;
+extern void XXH3_accumulate_512_sse2(void* XXH_RESTRICT acc,
+                                     const void* XXH_RESTRICT input,
+                                     const void* XXH_RESTRICT secret);
 
-		size_t i;
-		for (i = 0; i < XXH_STRIPE_LEN / sizeof(__m128i); i++) {
-			/* data_vec    = xinput[i]; */
-			__m128i const data_vec = _mm_loadu_si128(xinput + i);
-			/* key_vec     = xsecret[i]; */
-			__m128i const key_vec = _mm_loadu_si128(xsecret + i);
-			/* data_key    = data_vec ^ key_vec; */
-			__m128i const data_key = _mm_xor_si128(data_vec, key_vec);
-			/* data_key_lo = data_key >> 32; */
-			__m128i const data_key_lo = _mm_shuffle_epi32(data_key, _MM_SHUFFLE(0, 3, 0, 1));
-			/* product     = (data_key & 0xffffffff) * (data_key_lo & 0xffffffff); */
-			__m128i const product = _mm_mul_epu32(data_key, data_key_lo);
-			/* xacc[i] += swap(data_vec); */
-			__m128i const data_swap = _mm_shuffle_epi32(data_vec, _MM_SHUFFLE(1, 0, 3, 2));
-			__m128i const sum = _mm_add_epi64(xacc[i], data_swap);
-			/* xacc[i] += product; */
-			xacc[i] = _mm_add_epi64(product, sum);
-		}
-	}
-}
+extern void XXH3_scrambleAcc_sse2(void* XXH_RESTRICT acc, const void* XXH_RESTRICT secret);
 
-XXH_FORCE_INLINE XXH_TARGET_SSE2 void XXH3_scrambleAcc_sse2(void* XXH_RESTRICT acc, const void* XXH_RESTRICT secret) {
-	XXH_ASSERT((((size_t)acc) & 15) == 0);
-	{
-		XXH_ALIGN(16) __m128i* const xacc = (__m128i*)acc;
-		/* Unaligned. This is mainly for pointer arithmetic, and because
-		 * _mm_loadu_si128 requires a const __m128i * pointer for some reason. */
-		const __m128i* const xsecret = (const __m128i*)secret;
-		const __m128i prime32 = _mm_set1_epi32((int)XXH_PRIME32_1);
-
-		size_t i;
-		for (i = 0; i < XXH_STRIPE_LEN / sizeof(__m128i); i++) {
-			/* xacc[i] ^= (xacc[i] >> 47) */
-			__m128i const acc_vec = xacc[i];
-			__m128i const shifted = _mm_srli_epi64(acc_vec, 47);
-			__m128i const data_vec = _mm_xor_si128(acc_vec, shifted);
-			/* xacc[i] ^= xsecret[i]; */
-			__m128i const key_vec = _mm_loadu_si128(xsecret + i);
-			__m128i const data_key = _mm_xor_si128(data_vec, key_vec);
-
-			/* xacc[i] *= XXH_PRIME32_1; */
-			__m128i const data_key_hi = _mm_shuffle_epi32(data_key, _MM_SHUFFLE(0, 3, 0, 1));
-			__m128i const prod_lo = _mm_mul_epu32(data_key, prime32);
-			__m128i const prod_hi = _mm_mul_epu32(data_key_hi, prime32);
-			xacc[i] = _mm_add_epi64(prod_lo, _mm_slli_epi64(prod_hi, 32));
-		}
-	}
-}
-
-XXH_FORCE_INLINE XXH_TARGET_SSE2 void XXH3_initCustomSecret_sse2(void* XXH_RESTRICT customSecret, xxh_u64 seed64) {
-	XXH_STATIC_ASSERT((XXH_SECRET_DEFAULT_SIZE & 15) == 0);
-	(void)(&XXH_writeLE64);
-	{
-		int const nbRounds = XXH_SECRET_DEFAULT_SIZE / sizeof(__m128i);
-
-#if defined(_MSC_VER) && defined(_M_IX86) && _MSC_VER < 1900
-		// MSVC 32bit mode does not support _mm_set_epi64x before 2015
-		XXH_ALIGN(16) const xxh_i64 seed64x2[2] = { (xxh_i64)seed64, -(xxh_i64)seed64 };
-		__m128i const seed = _mm_load_si128((__m128i const*)seed64x2);
-#else
-		__m128i const seed = _mm_set_epi64x(-(xxh_i64)seed64, (xxh_i64)seed64);
-#endif
-		int i;
-
-		XXH_ALIGN(64) const float* const src = (float const*)XXH3_kSecret;
-		XXH_ALIGN(XXH_SEC_ALIGN) __m128i* dest = (__m128i*)customSecret;
-#if defined(__GNUC__) || defined(__clang__)
-		/*
-		 * On GCC & Clang, marking 'dest' as modified will cause the compiler:
-		 *   - do not extract the secret from sse registers in the internal loop
-		 *   - use less common registers, and avoid pushing these reg into stack
-		 */
-		__asm__("" : "+r"(dest));
-#endif
-
-		for (i = 0; i < nbRounds; ++i) {
-			dest[i] = _mm_add_epi64(_mm_castps_si128(_mm_load_ps(src + i * 4)), seed);
-		}
-	}
-}
+extern void XXH3_initCustomSecret_sse2(void* XXH_RESTRICT customSecret, xxh_u64 seed64);
 
 #endif
 
@@ -3570,43 +3332,10 @@ typedef void (*XXH3_f_accumulate_512)(void* XXH_RESTRICT, const void*, const voi
 typedef void (*XXH3_f_scrambleAcc)(void* XXH_RESTRICT, const void*);
 typedef void (*XXH3_f_initCustomSecret)(void* XXH_RESTRICT, xxh_u64);
 
-#if (XXH_VECTOR == XXH_AVX512)
-
-#define XXH3_accumulate_512 XXH3_accumulate_512_avx512
-#define XXH3_scrambleAcc XXH3_scrambleAcc_avx512
-#define XXH3_initCustomSecret XXH3_initCustomSecret_avx512
-
-#elif (XXH_VECTOR == XXH_AVX2)
-
-#define XXH3_accumulate_512 XXH3_accumulate_512_avx2
-#define XXH3_scrambleAcc XXH3_scrambleAcc_avx2
-#define XXH3_initCustomSecret XXH3_initCustomSecret_avx2
-
-#elif (XXH_VECTOR == XXH_SSE2)
-
-#define XXH3_accumulate_512 XXH3_accumulate_512_sse2
-#define XXH3_scrambleAcc XXH3_scrambleAcc_sse2
-#define XXH3_initCustomSecret XXH3_initCustomSecret_sse2
-
-#elif (XXH_VECTOR == XXH_NEON)
-
-#define XXH3_accumulate_512 XXH3_accumulate_512_neon
-#define XXH3_scrambleAcc XXH3_scrambleAcc_neon
-#define XXH3_initCustomSecret XXH3_initCustomSecret_scalar
-
-#elif (XXH_VECTOR == XXH_VSX)
-
-#define XXH3_accumulate_512 XXH3_accumulate_512_vsx
-#define XXH3_scrambleAcc XXH3_scrambleAcc_vsx
-#define XXH3_initCustomSecret XXH3_initCustomSecret_scalar
-
-#else /* scalar */
-
-#define XXH3_accumulate_512 XXH3_accumulate_512_scalar
-#define XXH3_scrambleAcc XXH3_scrambleAcc_scalar
-#define XXH3_initCustomSecret XXH3_initCustomSecret_scalar
-
-#endif
+extern XXH3_f_accumulate_512 XXH3_accumulate_512;
+extern XXH3_f_scrambleAcc XXH3_scrambleAcc;
+extern XXH3_f_initCustomSecret XXH3_initCustomSecret;
+extern void XXH3_init_cpu_features(void);
 
 #ifndef XXH_PREFETCH_DIST
 #ifdef __clang__
@@ -3823,6 +3552,7 @@ XXH_FORCE_INLINE XXH64_hash_t XXH3_64bits_internal(const void* XXH_RESTRICT inpu
 /* ===   Public entry point   === */
 
 XXH_PUBLIC_API XXH64_hash_t XXH3_64bits(const void* input, size_t len) {
+	XXH3_init_cpu_features();
 	return XXH3_64bits_internal(input, len, 0, XXH3_kSecret, sizeof(XXH3_kSecret), XXH3_hashLong_64b_default);
 }
 
@@ -3830,10 +3560,12 @@ XXH_PUBLIC_API XXH64_hash_t XXH3_64bits_withSecret(const void* input,
                                                    size_t len,
                                                    const void* secret,
                                                    size_t secretSize) {
+	XXH3_init_cpu_features();
 	return XXH3_64bits_internal(input, len, 0, secret, secretSize, XXH3_hashLong_64b_withSecret);
 }
 
 XXH_PUBLIC_API XXH64_hash_t XXH3_64bits_withSeed(const void* input, size_t len, XXH64_hash_t seed) {
+	XXH3_init_cpu_features();
 	return XXH3_64bits_internal(input, len, seed, XXH3_kSecret, sizeof(XXH3_kSecret), XXH3_hashLong_64b_withSeed);
 }
 
