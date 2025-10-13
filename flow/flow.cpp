@@ -21,23 +21,30 @@
 #include "flow/flow.h"
 
 #include <stdarg.h>
-
+#include <stdbool.h>
 #include <cinttypes>
 
 #include <openssl/err.h>
 #include <openssl/rand.h>
 
 #include <fmt/format.h>
-
+#include "cpuinfo_x86.h"
 #include "flow/DeterministicRandom.h"
 #include "flow/Error.h"
 #include "flow/Hostname.h"
 #include "flow/rte_memcpy.h"
 #include "flow/UnitTest.h"
 
+#ifdef __linux__
+#include <dlfcn.h>
+#endif
+
 #ifdef WITH_FOLLY_MEMCPY
 #include "folly_memcpy.h"
 #endif
+
+// For checking if CPU supports various AVX instructions
+using namespace cpu_features;
 
 std::atomic<bool> startSampling = false;
 LineageReference rootLineage;
@@ -88,10 +95,67 @@ void* rte_memcpy_noinline(void* __restrict __dest, const void* __restrict __src,
 	return rte_memcpy(__dest, __src, __n);
 }
 
+// Get pointer to original memcpy - initialize it early and safely.
+static void* (*original_memcpy)(void*, const void*, size_t) = nullptr;
+static void* libc_handle = nullptr;
+
+static void init_original_memcpy() {
+#if defined(__linux__)
+	// Try glibc soname first, then a generic libc
+	libc_handle = dlopen("libc.so.6", RTLD_NOW | RTLD_LOCAL);
+	if (!libc_handle)
+		libc_handle = dlopen("libc.so", RTLD_NOW | RTLD_LOCAL);
+#elif defined(__FreeBSD__)
+	libc_handle = dlopen("libc.so", RTLD_NOW | RTLD_LOCAL);
+#endif
+	if (libc_handle) {
+		// Prefer a versioned symbol if available on glibc
+#if defined(__linux__)
+		original_memcpy = (decltype(original_memcpy))dlvsym(libc_handle, "memcpy", "GLIBC_2.2.5");
+		if (!original_memcpy) {
+			printf("Not found in GLIBC_2.2.5, trying unversioned\n");
+			original_memcpy = (decltype(original_memcpy))dlsym(libc_handle, "memcpy");
+			if (!original_memcpy) {
+				printf("Error finding memcpy in libc: %s\n", dlerror());
+			}
+		} else {
+			printf("Found memcpy in GLIBC_2.2.5\n");
+		}
+#else
+		original_memcpy = (decltype(original_memcpy))dlsym(libc_handle, "memcpy");
+#endif
+	}
+}
+
 // This compilation unit will be linked in to the main binary, so this should override glibc memcpy
 __attribute__((visibility("default"))) void* memcpy(void* __restrict __dest, const void* __restrict __src, size_t __n) {
+	static bool has_fast_avx, has_fast_avx512f;
+	static bool initialized = false;
+
+	if (!initialized) {
+		X86Info info = GetX86Info();
+		has_fast_avx = info.features.avx;
+		static X86Microarchitecture uarch = GetX86Microarchitecture(&info);
+		std::cout << "memcpy: AVX " << (has_fast_avx ? "available" : "not available") << " AVX512F "
+		          << (info.features.avx512f ? "available" : "not available") << " uarch " << (int)uarch << "\n";
+		initialized = true;
+	}
+
+	// If AVX is not available, fall back to glibc memcpy
+	if (!has_fast_avx) {
+		printf("No AVX support, using original memcpy\n");
+		if (!original_memcpy) {
+			init_original_memcpy();
+		}
+		return original_memcpy(__dest, __src, __n);
+	}
+
 	// folly_memcpy is faster for small copies, but rte seems to win out in most other circumstances
-	return rte_memcpy(__dest, __src, __n);
+	if (__n <= 256 || !has_fast_avx512f) {
+		return folly_memcpy(__dest, __src, (uint32_t)__n);
+	} else {
+		return rte_memcpy(__dest, __src, __n);
+	}
 }
 #else
 void* rte_memcpy_noinline(void* __restrict __dest, const void* __restrict __src, size_t __n) {

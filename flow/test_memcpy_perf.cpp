@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "folly_memcpy.h"
 #include "flow/rte_memcpy.h"
 #include "flow/IRandom.h"
 #include "flow/UnitTest.h"
@@ -15,10 +16,6 @@
 #if (defined(__linux__) || defined(__FreeBSD__)) && defined(__AVX__)
 
 #include <sys/time.h>
-
-extern "C" {
-void* folly_memcpy(void* dst, const void* src, uint32_t length);
-}
 
 void* rte_memcpy_noinline(void* dst, const void* src, size_t length); // for performance comparisons
 
@@ -181,6 +178,7 @@ static void do_uncached_write(uint8_t* dst, int is_dst_cached, const uint8_t* sr
 		size_t dst_addrs[TEST_BATCH_SIZE], src_addrs[TEST_BATCH_SIZE];                                                 \
 		uint64_t start_time, total_time = 0;                                                                           \
 		uint64_t total_time2 = 0;                                                                                      \
+		uint64_t total_time3 = 0;                                                                                      \
 		for (iter = 0; iter < (TEST_ITERATIONS / TEST_BATCH_SIZE); iter++) {                                           \
 			fill_addr_arrays(dst_addrs, is_dst_cached, dst_uoffset, src_addrs, is_src_cached, src_uoffset);            \
 			start_time = rte_rdtsc();                                                                                  \
@@ -192,12 +190,21 @@ static void do_uncached_write(uint8_t* dst, int is_dst_cached, const uint8_t* sr
 			fill_addr_arrays(dst_addrs, is_dst_cached, dst_uoffset, src_addrs, is_src_cached, src_uoffset);            \
 			start_time = rte_rdtsc();                                                                                  \
 			for (t = 0; t < TEST_BATCH_SIZE; t++)                                                                      \
-				memcpy(dst + dst_addrs[t], src + src_addrs[t], size);                                                  \
+				folly_memcpy(dst + dst_addrs[t], src + src_addrs[t], size);                                            \
 			total_time2 += rte_rdtsc() - start_time;                                                                   \
 		}                                                                                                              \
-		printf("%3.0f -", (double)total_time / TEST_ITERATIONS);                                                       \
-		printf("%3.0f", (double)total_time2 / TEST_ITERATIONS);                                                        \
-		printf("(%6.2f%%) ", ((double)total_time - total_time2) * 100 / total_time2);                                  \
+		for (iter = 0; iter < (TEST_ITERATIONS / TEST_BATCH_SIZE); iter++) {                                           \
+			fill_addr_arrays(dst_addrs, is_dst_cached, dst_uoffset, src_addrs, is_src_cached, src_uoffset);            \
+			start_time = rte_rdtsc();                                                                                  \
+			for (t = 0; t < TEST_BATCH_SIZE; t++)                                                                      \
+				memcpy(dst + dst_addrs[t], src + src_addrs[t], size);                                                  \
+			total_time3 += rte_rdtsc() - start_time;                                                                   \
+		}                                                                                                              \
+		printf("%4.0f - ", (double)total_time / TEST_ITERATIONS);                                                      \
+		printf("%4.0f ", (double)total_time2 / TEST_ITERATIONS);                                                       \
+		printf("(%5.2f%%) - ", ((double)total_time - total_time2) * 100 / total_time2);                                \
+		printf("%4.0f", (double)total_time3 / TEST_ITERATIONS);                                                        \
+		printf("(%5.2f%%) | ", ((double)total_time - total_time3) * 100 / total_time3);                                \
 	} while (0)
 
 /* Run aligned memcpy tests for each cached/uncached permutation */
@@ -292,7 +299,7 @@ TEST_CASE("performance/memcpy/rte") {
 	/* See function comment */
 	do_uncached_write(large_buf_write, 0, small_buf_read, 1, SMALL_BUFFER_SIZE);
 
-	printf("\n** rte_memcpy() - memcpy perf. tests (C = compile-time constant) **\n"
+	printf("\n** rte_memcpy(), folly_memcpy(), and memcpy() perf. tests (C = compile-time constant) **\n"
 	       "======= ================= ================= ================= =================\n"
 	       "   Size   Cache to cache     Cache to mem      Mem to cache        Mem to mem\n"
 	       "(bytes)          (ticks)          (ticks)           (ticks)           (ticks)\n"

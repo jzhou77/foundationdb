@@ -92,6 +92,19 @@ if(APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
     set(IS_ARM_MAC YES)
 endif()
 
+if(USE_AVX)
+  message(STATUS "AVX enabled. ${CMAKE_HOST_SYSTEM_PROCESSOR} Configuring for folly_memcpy...")
+
+  # IMPORTANT: Your target uses an Assembly file (.S).
+  # The 'target_compile_features' command is mainly for C/C++. For assembly,
+  # it's more reliable to add the flag directly with target_compile_options.
+  # This is the correct, target-specific way to add "-mavx".
+  if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "^x86")
+    target_compile_options(flow PRIVATE -mavx)
+    target_compile_options(flow PRIVATE -mavx512f)
+  endif()
+endif()
+
 foreach(ft flow flow_sampling flowlinktest)
     target_include_directories(
 		${ft}
@@ -112,6 +125,8 @@ foreach(ft flow flow_sampling flowlinktest)
     target_link_libraries(${ft} PUBLIC fmt::fmt SimpleOpt crc32 libb64)
     if(UNIX AND NOT APPLE)
         target_link_libraries(${ft} PRIVATE folly_memcpy)
+        target_link_libraries(${ft} PRIVATE cpu_features)
+        target_link_libraries(${ft} PRIVATE dl)
         target_compile_definitions(${ft} PRIVATE WITH_FOLLY_MEMCPY)
     endif()
 
