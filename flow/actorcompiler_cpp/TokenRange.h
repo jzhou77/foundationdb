@@ -27,6 +27,7 @@
 #include <optional>
 #include <stdexcept>
 #include <algorithm>
+#include <cstddef>
 
 namespace actorcompiler {
 

@@ -51,3 +51,13 @@ endif()
 
 # Install to bin directory
 install(TARGETS actorcompiler_cpp DESTINATION bin COMPONENT clients)
+
+# --- Tests ---
+add_executable(actorcompiler_cpp_tokenizer_smoke
+  tests/tokenizer_smoke.cpp
+  Tokenizer.cpp
+  Token.cpp
+)
+target_include_directories(actorcompiler_cpp_tokenizer_smoke PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(actorcompiler_cpp_tokenizer_smoke PRIVATE cxx_std_17)
+add_test(NAME ActorCompilerTokenizerSmoke COMMAND actorcompiler_cpp_tokenizer_smoke)
