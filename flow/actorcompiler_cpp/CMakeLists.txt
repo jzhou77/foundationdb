@@ -61,3 +61,16 @@ add_executable(actorcompiler_cpp_tokenizer_smoke
 target_include_directories(actorcompiler_cpp_tokenizer_smoke PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_features(actorcompiler_cpp_tokenizer_smoke PRIVATE cxx_std_17)
 add_test(NAME ActorCompilerTokenizerSmoke COMMAND actorcompiler_cpp_tokenizer_smoke)
+
+add_executable(actorcompiler_cpp_parser_smoke
+  tests/parser_smoke.cpp
+  Tokenizer.cpp
+  Token.cpp
+  ParseTree.cpp
+  ActorParser.cpp
+  ActorCompiler.cpp
+)
+target_include_directories(actorcompiler_cpp_parser_smoke PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(actorcompiler_cpp_parser_smoke PRIVATE cxx_std_17)
+target_link_libraries(actorcompiler_cpp_parser_smoke PRIVATE OpenSSL::Crypto)
+add_test(NAME ActorCompilerParserSmoke COMMAND actorcompiler_cpp_parser_smoke)

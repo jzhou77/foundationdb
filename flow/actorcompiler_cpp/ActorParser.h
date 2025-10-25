@@ -28,6 +28,9 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <memory>
+#include <cstdint>
+#include <ostream>
 
 namespace actorcompiler {
 
@@ -58,9 +61,47 @@ private:
 	Actor parseActor(size_t pos, size_t& end);
 	Descr parseDescr(size_t pos, size_t& end);
 
+	// Statement and helper parsers
+	CodeBlock parseCodeBlock(const TokenRange& toks);
+	Statement* parseCompoundStatement(const TokenRange& toks);
+	void parseStatement(const TokenRange& toks, std::vector<std::unique_ptr<Statement>>& statements);
+	LoopStatement* parseLoopStatement(const TokenRange& toks);
+	ChooseStatement* parseChooseStatement(const TokenRange& toks);
+	WhenStatement* parseWhenStatement(const TokenRange& toks);
+	StateDeclarationStatement* parseStateDeclaration(const TokenRange& toks);
+	ReturnStatement* parseReturnStatement(const TokenRange& toks);
+	ThrowStatement* parseThrowStatement(const TokenRange& toks);
+	WaitStatement* parseWaitStatement(const TokenRange& toks);
+	WhileStatement* parseWhileStatement(const TokenRange& toks);
+	Statement* parseForStatement(const TokenRange& toks);
+	IfStatement* parseIfStatement(const TokenRange& toks);
+	void parseElseStatement(const TokenRange& toks, Statement* prevStatement);
+	TryStatement* parseTryStatement(const TokenRange& toks);
+	void parseCatchStatement(const TokenRange& toks, Statement* prevStatement);
+
+	void parseDescrHeading(Descr& descr, const TokenRange& toks);
+	std::vector<Declaration> parseDescrCodeBlock(const TokenRange& toks);
+
+	bool parseClassContext(TokenRange toks, std::string& name);
+	void parseActorHeading(Actor& actor, TokenRange toks);
+	void parseTestCaseHeading(Actor& actor, TokenRange toks);
+
+	// Declaration helpers
+	void parseDeclaration(TokenRange tokens,
+	                      Token& name,
+	                      TokenRange& type,
+	                      TokenRange& initializer,
+	                      bool& constructorSyntax);
+	VarDeclaration parseVarDeclaration(const TokenRange& tokens);
+
+	// Predicates
+	static bool isWhitespace(const Token& t) { return t.isWhitespace(); }
+	static bool isNonWhitespace(const Token& t) { return !t.isWhitespace(); }
+
 	// Helper methods
 	TokenRange range(size_t begin, size_t end) const;
 	std::string str(const TokenRange& range) const;
+	std::string norm(const TokenRange& range) const; // normalize whitespace to single spaces
 };
 
 } // namespace actorcompiler
