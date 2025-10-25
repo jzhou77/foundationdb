@@ -10,6 +10,8 @@ set(ACTORCOMPILER_CPP_SRCS
   Tokenizer.cpp
   ActorParser.cpp
   ActorCompiler.cpp
+  Function.cpp
+  Context.cpp
 )
 
 set(ACTORCOMPILER_CPP_HEADERS
@@ -69,8 +71,22 @@ add_executable(actorcompiler_cpp_parser_smoke
   ParseTree.cpp
   ActorParser.cpp
   ActorCompiler.cpp
+  Function.cpp
+  Context.cpp
 )
 target_include_directories(actorcompiler_cpp_parser_smoke PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_features(actorcompiler_cpp_parser_smoke PRIVATE cxx_std_17)
 target_link_libraries(actorcompiler_cpp_parser_smoke PRIVATE OpenSSL::Crypto)
 add_test(NAME ActorCompilerParserSmoke COMMAND actorcompiler_cpp_parser_smoke)
+
+add_executable(actorcompiler_cpp_state_discovery
+  tests/state_discovery_test.cpp
+  ParseTree.cpp
+  ActorCompiler.cpp
+  Function.cpp
+  Context.cpp
+)
+target_include_directories(actorcompiler_cpp_state_discovery PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(actorcompiler_cpp_state_discovery PRIVATE cxx_std_17)
+target_link_libraries(actorcompiler_cpp_state_discovery PRIVATE OpenSSL::Crypto)
+add_test(NAME ActorCompilerStateDiscovery COMMAND actorcompiler_cpp_state_discovery)

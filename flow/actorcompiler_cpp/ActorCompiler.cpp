@@ -57,6 +57,11 @@ ActorCompiler::ActorCompiler(const Actor& actor,
 	fullClassName = className; // no templates for scaffold
 	stateClassName = className + "State";
 
+	// Discover state variables in actor body
+	if (actor.body) {
+		findState(actor.body.get());
+	}
+
 	// Precompute a UID mapping for this actor identifier
 	auto key = sourceFile + ":" + actor.name;
 	auto uid = getUidFromString(key);
@@ -164,6 +169,45 @@ void DescrCompiler::write(std::ostream& writer, int& lines) {
 	}
 	writer << memberIndentStr << "};\n";
 	lines += 1;
+}
+
+void ActorCompiler::findState(Statement* stmt) {
+	if (!stmt)
+		return;
+
+	// Check if this is a state declaration
+	if (auto* stateDecl = dynamic_cast<StateDeclarationStatement*>(stmt)) {
+		stateVariables.insert(stateDecl->decl.name);
+		return;
+	}
+
+	// Recursively traverse compound statements
+	if (auto* codeBlock = dynamic_cast<CodeBlock*>(stmt)) {
+		for (auto& s : codeBlock->statements) {
+			findState(s.get());
+		}
+	} else if (auto* whileStmt = dynamic_cast<WhileStatement*>(stmt)) {
+		findState(whileStmt->body.get());
+	} else if (auto* forStmt = dynamic_cast<ForStatement*>(stmt)) {
+		findState(forStmt->body.get());
+	} else if (auto* rangeForStmt = dynamic_cast<RangeForStatement*>(stmt)) {
+		findState(rangeForStmt->body.get());
+	} else if (auto* loopStmt = dynamic_cast<LoopStatement*>(stmt)) {
+		findState(loopStmt->body.get());
+	} else if (auto* ifStmt = dynamic_cast<IfStatement*>(stmt)) {
+		findState(ifStmt->ifBody.get());
+		findState(ifStmt->elseBody.get());
+	} else if (auto* tryStmt = dynamic_cast<TryStatement*>(stmt)) {
+		findState(tryStmt->tryBody.get());
+		for (auto& catchClause : tryStmt->catches) {
+			findState(catchClause.body.get());
+		}
+	} else if (auto* chooseStmt = dynamic_cast<ChooseStatement*>(stmt)) {
+		findState(chooseStmt->body.get());
+	} else if (auto* whenStmt = dynamic_cast<WhenStatement*>(stmt)) {
+		// WaitStatement inside when doesn't need recursion (no nested statements)
+		findState(whenStmt->body.get());
+	}
 }
 
 void ErrorMessagePolicy::handleActorWithoutWait(const std::string& sourceFile, const Actor& actor) {

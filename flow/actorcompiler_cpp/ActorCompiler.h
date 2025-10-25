@@ -26,7 +26,9 @@
 #include "Context.h"
 #include "Error.h"
 #include <string>
+#include <set>
 #include <map>
+#include <cstdint>
 #include <ostream>
 
 namespace actorcompiler {
@@ -56,7 +58,8 @@ private:
 	std::string fullClassName;
 	std::string stateClassName;
 
-	// To be implemented in Step 5
+	// State variables and function registry
+	std::set<std::string> stateVariables;
 	std::map<std::pair<uint64_t, uint64_t>, std::string> uidObjects;
 
 public:
@@ -72,7 +75,13 @@ public:
 	// Get UID mappings
 	const std::map<std::pair<uint64_t, uint64_t>, std::string>& getUidObjects() const { return uidObjects; }
 
+	// Get discovered state variables
+	const std::set<std::string>& getStateVariables() const { return stateVariables; }
+
 private:
+	// State discovery - traverse AST to find state variables
+	void findState(Statement* stmt);
+
 	// Code generation methods (to be implemented in Step 5)
 	void writeActorFunction(std::ostream& writer, const std::string& fullReturnType);
 	void writeActorClass(std::ostream& writer, const std::string& fullStateClassName);
