@@ -41,7 +41,7 @@ public:
 
 	Function() = default;
 
-	// Write methods (to be implemented in Step 5)
+	// Write methods
 	void indent(int change);
 	void writeLine(const std::string& line);
 	void writeLineUnindented(const std::string& line);
