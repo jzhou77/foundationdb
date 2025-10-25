@@ -24,6 +24,8 @@
 #include <stdexcept>
 #include <string>
 #include <sstream>
+#include <utility>
+#include <cstdio>
 
 namespace actorcompiler {
 
@@ -50,7 +52,7 @@ private:
 	static std::string formatMessage(const char* format, Args&&... args) {
 		// Simple sprintf-style formatting
 		char buffer[4096];
-		snprintf(buffer, sizeof(buffer), format, std::forward<Args>(args)...);
+		std::snprintf(buffer, sizeof(buffer), format, std::forward<Args>(args)...);
 		return std::string(buffer);
 	}
 };

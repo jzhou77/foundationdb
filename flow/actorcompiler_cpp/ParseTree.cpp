@@ -19,6 +19,8 @@
  */
 
 #include "ParseTree.h"
+#include <sstream>
+#include <string>
 
 namespace actorcompiler {
 
@@ -79,6 +81,18 @@ bool CodeBlock::containsWait() const {
 		}
 	}
 	return false;
+}
+
+std::string CodeBlock::toString() const {
+	std::ostringstream out;
+	out << "CodeBlock\n";
+	for (const auto& stmt : statements) {
+		if (stmt) {
+			out << stmt->toString() << "\n";
+		}
+	}
+	out << "EndCodeBlock";
+	return out.str();
 }
 
 } // namespace actorcompiler

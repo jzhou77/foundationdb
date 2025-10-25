@@ -42,18 +42,27 @@ public:
 
 	virtual ~Statement() = default;
 	virtual bool containsWait() const { return false; }
+	// Debug string representation similar to C# ToString()
+	virtual std::string toString() const { return std::string(); }
 };
 
 // Plain C++ code statement (pass-through)
 class PlainOldCodeStatement : public Statement {
 public:
 	std::string code;
+	std::string toString() const override { return code; }
 };
 
 // State variable declaration
 class StateDeclarationStatement : public Statement {
 public:
 	VarDeclaration decl;
+	std::string toString() const override {
+		if (decl.initializerConstructorSyntax)
+			return std::string("State ") + decl.type + " " + decl.name + "(" + decl.initializer + ");";
+		else
+			return std::string("State ") + decl.type + " " + decl.name + " = " + decl.initializer + ";";
+	}
 };
 
 // Forward declarations for compound statements
@@ -66,6 +75,7 @@ public:
 	std::unique_ptr<Statement> body;
 
 	bool containsWait() const override;
+	std::string toString() const override { return std::string("While ") + expression; }
 };
 
 // For loop (traditional 3-part)
@@ -95,6 +105,7 @@ public:
 	std::unique_ptr<Statement> body;
 
 	bool containsWait() const override;
+	std::string toString() const override { return std::string("Loop ") + (body ? body->toString() : std::string("")); }
 };
 
 // Break statement
@@ -118,6 +129,7 @@ public:
 class ReturnStatement : public Statement {
 public:
 	std::string expression;
+	std::string toString() const override { return std::string("Return ") + expression; }
 };
 
 // Wait statement (Flow-specific)
@@ -129,6 +141,10 @@ public:
 	bool isWaitNext = false;
 
 	bool containsWait() const override { return true; }
+	std::string toString() const override {
+		return std::string("Wait ") + result.type + " " + result.name + " <- " + futureExpression + " (" +
+		       (resultIsState ? "state" : "local") + ")";
+	}
 };
 
 // Choose statement (Flow-specific)
@@ -137,6 +153,9 @@ public:
 	std::unique_ptr<Statement> body;
 
 	bool containsWait() const override;
+	std::string toString() const override {
+		return std::string("Choose ") + (body ? body->toString() : std::string(""));
+	}
 };
 
 // When statement inside choose (Flow-specific)
@@ -146,6 +165,10 @@ public:
 	std::unique_ptr<Statement> body;
 
 	bool containsWait() const override { return true; }
+	std::string toString() const override {
+		return std::string("When (") + (wait ? wait->toString() : std::string("")) + ") " +
+		       (body ? body->toString() : std::string(""));
+	}
 };
 
 // Try/catch statement
@@ -175,6 +198,7 @@ public:
 	std::vector<std::unique_ptr<Statement>> statements;
 
 	bool containsWait() const override;
+	std::string toString() const override;
 };
 
 // DESCR declaration (for descriptor metadata)
