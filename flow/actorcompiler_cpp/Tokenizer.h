@@ -43,12 +43,14 @@ private:
 };
 
 // Helper functions for filtering tokens outside brackets/angles
+// These mirror the C# AngleBracketParser/BracketParser helpers but operate on TokenRange
+class TokenRange; // fwd
 namespace AngleBracketParser {
-std::vector<Token> notInsideAngleBrackets(const std::vector<Token>& tokens);
+std::vector<Token> notInsideAngleBrackets(const TokenRange& range);
 }
 
 namespace BracketParser {
-std::vector<Token> notInsideBrackets(const std::vector<Token>& tokens);
+std::vector<Token> notInsideBrackets(const TokenRange& range);
 }
 
 } // namespace actorcompiler

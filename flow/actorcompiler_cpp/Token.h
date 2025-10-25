@@ -23,6 +23,8 @@
 
 #include <string>
 #include <functional>
+#include <stdexcept>
+#include "Error.h"
 
 namespace actorcompiler {
 
@@ -44,7 +46,12 @@ struct Token {
 
 	// Assert a condition with an error message
 	template <typename Predicate>
-	const Token& assert(const std::string& error, Predicate pred) const;
+	const Token& assert(const std::string& error, Predicate pred) const {
+		if (!pred(*this)) {
+			throw Error(sourceLine, "%s", error.c_str());
+		}
+		return *this;
+	}
 
 	// Find matching bracket/paren in a range
 	TokenRange getMatchingRangeIn(const TokenRange& range) const;

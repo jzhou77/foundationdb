@@ -26,6 +26,7 @@
 #include <functional>
 #include <optional>
 #include <stdexcept>
+#include <algorithm>
 
 namespace actorcompiler {
 
@@ -47,53 +48,120 @@ public:
 
 	// Range properties
 	bool isEmpty() const { return beginPos == endPos; }
-	size_t begin() const { return beginPos; }
-	size_t end() const { return endPos; }
+	// Index-based boundaries (avoid name clash with iterator begin()/end())
+	size_t beginIndex() const { return beginPos; }
+	size_t endIndex() const { return endPos; }
 	size_t length() const { return endPos - beginPos; }
 
 	// Access tokens
-	const Token& first() const;
-	const Token& last() const;
+	const Token& first() const {
+		if (isEmpty())
+			throw std::invalid_argument("Empty TokenRange");
+		return (*tokens)[beginPos];
+	}
+	const Token& last() const {
+		if (isEmpty())
+			throw std::invalid_argument("Empty TokenRange");
+		return (*tokens)[endPos - 1];
+	}
 	const Token& operator[](size_t index) const { return (*tokens)[beginPos + index]; }
 
 	// Find operations
 	template <typename Predicate>
-	std::optional<Token> firstOrDefault(Predicate pred) const;
+	std::optional<Token> firstOrDefault(Predicate pred) const {
+		for (size_t i = beginPos; i < endPos; ++i) {
+			const Token& t = (*tokens)[i];
+			if (pred(t))
+				return t; // copy
+		}
+		return std::nullopt;
+	}
 
 	template <typename Predicate>
-	const Token& last(Predicate pred) const;
+	const Token& last(Predicate pred) const {
+		for (size_t i = endPos; i-- > beginPos;) {
+			const Token& t = (*tokens)[i];
+			if (pred(t))
+				return t;
+		}
+		throw std::runtime_error("Matching token not found");
+	}
 
 	// Range manipulation
-	TokenRange skip(size_t count) const;
-	TokenRange consume(const std::string& value) const;
+	TokenRange skip(size_t count) const { return TokenRange(*tokens, beginPos + count, endPos); }
+	TokenRange consume(const std::string& value) const {
+		first().assert("Expected " + value, [&, value](const Token& t) { return t.value == value; });
+		return skip(1);
+	}
 
 	template <typename Predicate>
-	TokenRange consume(const std::string& error, Predicate pred) const;
+	TokenRange consume(const std::string& error, Predicate pred) const {
+		first().assert(error, pred);
+		return skip(1);
+	}
 
 	template <typename Predicate>
-	TokenRange skipWhile(Predicate pred) const;
+	TokenRange skipWhile(Predicate pred) const {
+		for (size_t i = beginPos; i < endPos; ++i) {
+			if (!pred((*tokens)[i]))
+				return TokenRange(*tokens, i, endPos);
+		}
+		return TokenRange(*tokens, endPos, endPos);
+	}
 
 	template <typename Predicate>
-	TokenRange takeWhile(Predicate pred) const;
+	TokenRange takeWhile(Predicate pred) const {
+		for (size_t i = beginPos; i < endPos; ++i) {
+			if (!pred((*tokens)[i]))
+				return TokenRange(*tokens, beginPos, i);
+		}
+		return TokenRange(*tokens, beginPos, endPos);
+	}
 
 	template <typename Predicate>
-	TokenRange revTakeWhile(Predicate pred) const;
+	TokenRange revTakeWhile(Predicate pred) const {
+		for (size_t i = endPos; i-- > beginPos;) {
+			if (!pred((*tokens)[i]))
+				return TokenRange(*tokens, i + 1, endPos);
+		}
+		return TokenRange(*tokens, beginPos, endPos);
+	}
 
 	template <typename Predicate>
-	TokenRange revSkipWhile(Predicate pred) const;
+	TokenRange revSkipWhile(Predicate pred) const {
+		for (size_t i = endPos; i-- > beginPos;) {
+			if (!pred((*tokens)[i]))
+				return TokenRange(*tokens, beginPos, i + 1);
+		}
+		return TokenRange(*tokens, beginPos, beginPos);
+	}
 
 	// Iteration support
 	using const_iterator = std::vector<Token>::const_iterator;
 	const_iterator cbegin() const { return tokens->begin() + beginPos; }
 	const_iterator cend() const { return tokens->begin() + endPos; }
+	const_iterator begin() const { return cbegin(); }
+	const_iterator end() const { return cend(); }
 
 	// Check if all tokens satisfy predicate
 	template <typename Predicate>
-	bool all(Predicate pred) const;
+	bool all(Predicate pred) const {
+		for (size_t i = beginPos; i < endPos; ++i) {
+			if (!pred((*tokens)[i]))
+				return false;
+		}
+		return true;
+	}
 
 	// Check if any token satisfies predicate
 	template <typename Predicate>
-	bool any(Predicate pred) const;
+	bool any(Predicate pred) const {
+		for (size_t i = beginPos; i < endPos; ++i) {
+			if (pred((*tokens)[i]))
+				return true;
+		}
+		return false;
+	}
 
 	// Get underlying token vector
 	const std::vector<Token>& getAllTokens() const { return *tokens; }
