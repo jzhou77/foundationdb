@@ -266,6 +266,10 @@ void ActorCompiler::compile(Function* func, Statement* stmt, const Context& ctx)
 		compileStatement(func, rangeForStmt, ctx);
 	} else if (auto* chooseStmt = dynamic_cast<ChooseStatement*>(stmt)) {
 		compileStatement(func, chooseStmt, ctx);
+	} else if (auto* tryStmt = dynamic_cast<TryStatement*>(stmt)) {
+		compileStatement(func, tryStmt, ctx);
+	} else if (auto* throwStmt = dynamic_cast<ThrowStatement*>(stmt)) {
+		compileStatement(func, throwStmt, ctx);
 	} else {
 		// Unhandled statement type - will be implemented in later steps
 		func->writeLine("// TODO: Compile " + std::string(typeid(*stmt).name()));
@@ -587,6 +591,92 @@ void ActorCompiler::compileStatement(Function* func, ChooseStatement* stmt, cons
 	func->indent(-1);
 	func->writeLine("}");
 	func->writeLine("// END choose block");
+}
+
+void ActorCompiler::compileStatement(Function* func, TryStatement* stmt, const Context& ctx) {
+	// Simplified try/catch implementation
+	// Full implementation would generate catch handler functions
+
+	// Flow actors only support a single catch clause
+	if (stmt->catches.size() != 1) {
+		throw Error(stmt->firstSourceLine, "try statement must have exactly one catch clause");
+	}
+
+	const auto& catchClause = stmt->catches[0];
+
+	// Parse the catch expression to extract error variable name
+	std::string errorVarName = "__current_error";
+	std::string catchExpr = catchClause.expression;
+
+	// Remove spaces
+	catchExpr.erase(std::remove(catchExpr.begin(), catchExpr.end(), ' '), catchExpr.end());
+
+	if (catchExpr != "...") {
+		// Expected format: "Error&varName"
+		if (catchExpr.find("Error&") == 0) {
+			errorVarName = catchExpr.substr(6); // Skip "Error&"
+		} else {
+			throw Error(catchClause.firstSourceLine, "Only type 'Error&' or '...' may be caught in an actor function");
+		}
+	}
+
+	// Generate catch handler label
+	std::string catchLabel = generateLabel();
+
+	func->writeLine("// BEGIN try block");
+	func->writeLine("try {");
+	func->indent(+1);
+
+	// Compile try body with catch context
+	Context tryCtx = ctx.withCatch(errorVarName, "__error_code", catchLabel);
+	compile(func, stmt->tryBody.get(), tryCtx);
+
+	func->indent(-1);
+	func->writeLine("}");
+	func->writeLine("catch (Error& " + errorVarName + ") {");
+	func->indent(+1);
+	func->writeLine("goto " + catchLabel + ";");
+	func->indent(-1);
+	func->writeLine("}");
+	func->writeLine("catch (...) {");
+	func->indent(+1);
+	func->writeLine(errorVarName + " = unknown_error();");
+	func->writeLine("goto " + catchLabel + ";");
+	func->indent(-1);
+	func->writeLine("}");
+
+	// Emit catch handler label and compile catch body
+	func->writeLine("");
+	func->writeLine(catchLabel + ":");
+	func->writeLine("{");
+	func->indent(+1);
+	compile(func, catchClause.body.get(), ctx);
+	func->indent(-1);
+	func->writeLine("}");
+	func->writeLine("// END try block");
+}
+
+void ActorCompiler::compileStatement(Function* func, ThrowStatement* stmt, const Context& ctx) {
+	// Throw statement - re-throws or throws new error
+
+	if (stmt->expression.empty()) {
+		// Re-throw current exception
+		if (!ctx.catchHandler.empty() && !ctx.errorVarName.empty()) {
+			func->writeLine("goto " + ctx.catchHandler + "; // re-throw");
+		} else {
+			throw Error(stmt->firstSourceLine, "throw statement with no expression has no current exception in scope");
+		}
+	} else {
+		// Throw new exception
+		if (!ctx.catchHandler.empty()) {
+			// If we have a catch handler, store error and goto it
+			func->writeLine(ctx.errorVarName + " = " + stmt->expression + ";");
+			func->writeLine("goto " + ctx.catchHandler + "; // throw");
+		} else {
+			// No catch handler, use C++ throw
+			func->writeLine("throw " + stmt->expression + ";");
+		}
+	}
 }
 
 void ErrorMessagePolicy::handleActorWithoutWait(const std::string& sourceFile, const Actor& actor) {

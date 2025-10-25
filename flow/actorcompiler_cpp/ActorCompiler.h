@@ -117,6 +117,8 @@ private:
 	void compileStatement(Function* func, LoopStatement* stmt, const Context& ctx);
 	void compileStatement(Function* func, RangeForStatement* stmt, const Context& ctx);
 	void compileStatement(Function* func, ChooseStatement* stmt, const Context& ctx);
+	void compileStatement(Function* func, TryStatement* stmt, const Context& ctx);
+	void compileStatement(Function* func, ThrowStatement* stmt, const Context& ctx);
 
 	// Code generation methods (to be implemented in Step 5)
 	void writeActorFunction(std::ostream& writer, const std::string& fullReturnType);

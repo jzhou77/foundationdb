@@ -155,3 +155,16 @@ target_compile_features(actorcompiler_cpp_choose_when PRIVATE cxx_std_17)
 target_compile_definitions(actorcompiler_cpp_choose_when PRIVATE ACTORCOMPILER_TEST_BUILD)
 target_link_libraries(actorcompiler_cpp_choose_when PRIVATE OpenSSL::Crypto)
 add_test(NAME ActorCompilerChooseWhen COMMAND actorcompiler_cpp_choose_when)
+
+add_executable(actorcompiler_cpp_try_catch
+  tests/try_catch_test.cpp
+  ParseTree.cpp
+  ActorCompiler.cpp
+  Function.cpp
+  Context.cpp
+)
+target_include_directories(actorcompiler_cpp_try_catch PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(actorcompiler_cpp_try_catch PRIVATE cxx_std_17)
+target_compile_definitions(actorcompiler_cpp_try_catch PRIVATE ACTORCOMPILER_TEST_BUILD)
+target_link_libraries(actorcompiler_cpp_try_catch PRIVATE OpenSSL::Crypto)
+add_test(NAME ActorCompilerTryCatch COMMAND actorcompiler_cpp_try_catch)
