@@ -129,3 +129,16 @@ target_compile_features(actorcompiler_cpp_wait_compilation PRIVATE cxx_std_17)
 target_compile_definitions(actorcompiler_cpp_wait_compilation PRIVATE ACTORCOMPILER_TEST_BUILD)
 target_link_libraries(actorcompiler_cpp_wait_compilation PRIVATE OpenSSL::Crypto)
 add_test(NAME ActorCompilerWaitCompilation COMMAND actorcompiler_cpp_wait_compilation)
+
+add_executable(actorcompiler_cpp_loop_compilation
+  tests/loop_compilation_test.cpp
+  ParseTree.cpp
+  ActorCompiler.cpp
+  Function.cpp
+  Context.cpp
+)
+target_include_directories(actorcompiler_cpp_loop_compilation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(actorcompiler_cpp_loop_compilation PRIVATE cxx_std_17)
+target_compile_definitions(actorcompiler_cpp_loop_compilation PRIVATE ACTORCOMPILER_TEST_BUILD)
+target_link_libraries(actorcompiler_cpp_loop_compilation PRIVATE OpenSSL::Crypto)
+add_test(NAME ActorCompilerLoopCompilation COMMAND actorcompiler_cpp_loop_compilation)

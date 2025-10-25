@@ -254,6 +254,16 @@ void ActorCompiler::compile(Function* func, Statement* stmt, const Context& ctx)
 		compileStatement(func, codeBlock, ctx);
 	} else if (auto* waitStmt = dynamic_cast<WaitStatement*>(stmt)) {
 		compileStatement(func, waitStmt, ctx);
+	} else if (auto* ifStmt = dynamic_cast<IfStatement*>(stmt)) {
+		compileStatement(func, ifStmt, ctx);
+	} else if (auto* whileStmt = dynamic_cast<WhileStatement*>(stmt)) {
+		compileStatement(func, whileStmt, ctx);
+	} else if (auto* forStmt = dynamic_cast<ForStatement*>(stmt)) {
+		compileStatement(func, forStmt, ctx);
+	} else if (auto* loopStmt = dynamic_cast<LoopStatement*>(stmt)) {
+		compileStatement(func, loopStmt, ctx);
+	} else if (auto* rangeForStmt = dynamic_cast<RangeForStatement*>(stmt)) {
+		compileStatement(func, rangeForStmt, ctx);
 	} else {
 		// Unhandled statement type - will be implemented in later steps
 		func->writeLine("// TODO: Compile " + std::string(typeid(*stmt).name()));
@@ -366,6 +376,121 @@ void ActorCompiler::compileStatement(Function* func, WaitStatement* stmt, const 
 	func->writeLine("");
 	func->writeLine(contLabel + ":");
 	// The continuation function will be filled in by subsequent compileStatement calls
+}
+
+void ActorCompiler::compileStatement(Function* func, IfStatement* stmt, const Context& ctx) {
+	// Simplified if/else compilation - doesn't handle continuations yet
+	// Full implementation would check if body contains waits and create continuation functions
+
+	func->writeLine("if " + std::string(stmt->constexpr_ ? "constexpr " : "") + "(" + stmt->expression + ")");
+	func->writeLine("{");
+	func->indent(+1);
+
+	// Compile if body
+	compile(func, stmt->ifBody.get(), ctx);
+
+	func->indent(-1);
+	func->writeLine("}");
+
+	// Compile else body if present
+	if (stmt->elseBody) {
+		func->writeLine("else");
+		func->writeLine("{");
+		func->indent(+1);
+
+		compile(func, stmt->elseBody.get(), ctx);
+
+		func->indent(-1);
+		func->writeLine("}");
+	}
+}
+
+void ActorCompiler::compileStatement(Function* func, WhileStatement* stmt, const Context& ctx) {
+	// Compile while (x) { y } as for(;x;) { y }
+	// Create an equivalent ForStatement
+	ForStatement equivalent;
+	equivalent.condExpression = stmt->expression;
+	equivalent.body = std::move(stmt->body);
+	equivalent.firstSourceLine = stmt->firstSourceLine;
+
+	compileStatement(func, &equivalent, ctx);
+
+	// Move the body back (since we don't want to invalidate the original)
+	stmt->body = std::move(equivalent.body);
+}
+
+void ActorCompiler::compileStatement(Function* func, LoopStatement* stmt, const Context& ctx) {
+	// Compile loop { body } as for(;;;) { body }
+	ForStatement equivalent;
+	equivalent.body = std::move(stmt->body);
+	equivalent.firstSourceLine = stmt->firstSourceLine;
+
+	compileStatement(func, &equivalent, ctx);
+
+	// Move the body back
+	stmt->body = std::move(equivalent.body);
+}
+
+void ActorCompiler::compileStatement(Function* func, ForStatement* stmt, const Context& ctx) {
+	// Simplified for loop compilation
+	// Full implementation would check for waits and create loop continuation functions
+
+	// Emit init expression
+	if (!stmt->initExpression.empty()) {
+		func->writeLine(stmt->initExpression + ";");
+	}
+
+	// Generate loop head label
+	std::string loopHeadLabel = generateLabel();
+	func->writeLine("");
+	func->writeLine(loopHeadLabel + ":");
+
+	// Emit condition check (if present)
+	std::string breakLabel = generateLabel();
+	std::string continueLabel = generateLabel();
+
+	if (!stmt->condExpression.empty()) {
+		func->writeLine("if (!(" + stmt->condExpression + "))");
+		func->indent(+1);
+		func->writeLine("goto " + breakLabel + ";");
+		func->indent(-1);
+	}
+
+	// Compile loop body with loop context
+	Context loopCtx = ctx.loopContext(breakLabel, continueLabel);
+	func->writeLine("{");
+	func->indent(+1);
+	compile(func, stmt->body.get(), loopCtx);
+	func->indent(-1);
+	func->writeLine("}");
+
+	// Emit continue label and next expression
+	func->writeLine("");
+	func->writeLine(continueLabel + ":");
+	if (!stmt->nextExpression.empty()) {
+		func->writeLine(stmt->nextExpression + ";");
+	}
+
+	// Jump back to loop head
+	func->writeLine("goto " + loopHeadLabel + ";");
+
+	// Emit break label
+	func->writeLine("");
+	func->writeLine(breakLabel + ":");
+}
+
+void ActorCompiler::compileStatement(Function* func, RangeForStatement* stmt, const Context& ctx) {
+	// Simplified range-for compilation - emits native C++ range-for
+	// Full implementation would handle waits by converting to iterator-based for loop
+
+	func->writeLine("for (" + stmt->rangeDecl + " : " + stmt->rangeExpression + ")");
+	func->writeLine("{");
+	func->indent(+1);
+
+	compile(func, stmt->body.get(), ctx);
+
+	func->indent(-1);
+	func->writeLine("}");
 }
 
 void ErrorMessagePolicy::handleActorWithoutWait(const std::string& sourceFile, const Actor& actor) {

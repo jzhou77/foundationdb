@@ -111,6 +111,11 @@ private:
 	void compileStatement(Function* func, ContinueStatement* stmt, const Context& ctx);
 	void compileStatement(Function* func, CodeBlock* stmt, const Context& ctx);
 	void compileStatement(Function* func, WaitStatement* stmt, const Context& ctx);
+	void compileStatement(Function* func, IfStatement* stmt, const Context& ctx);
+	void compileStatement(Function* func, WhileStatement* stmt, const Context& ctx);
+	void compileStatement(Function* func, ForStatement* stmt, const Context& ctx);
+	void compileStatement(Function* func, LoopStatement* stmt, const Context& ctx);
+	void compileStatement(Function* func, RangeForStatement* stmt, const Context& ctx);
 
 	// Code generation methods (to be implemented in Step 5)
 	void writeActorFunction(std::ostream& writer, const std::string& fullReturnType);
