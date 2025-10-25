@@ -51,7 +51,7 @@ ActorCompiler::ActorCompiler(const Actor& actor,
                              bool lineNumbersEnabled,
                              bool generateProbes)
   : actor(actor), sourceFile(sourceFile), isTopLevel(isTopLevel), lineNumbersEnabled(lineNumbersEnabled),
-    generateProbes(generateProbes) {
+    generateProbes(generateProbes), labelIndex(0) {
 	// Derive simple class names for this scaffold
 	className = actor.name + "Actor";
 	fullClassName = className; // no templates for scaffold
@@ -66,6 +66,13 @@ ActorCompiler::ActorCompiler(const Actor& actor,
 	auto key = sourceFile + ":" + actor.name;
 	auto uid = getUidFromString(key);
 	this->uidObjects[{ uid.first, uid.second }] = key;
+}
+
+ActorCompiler::~ActorCompiler() {
+	// Clean up dynamically allocated Function objects
+	for (auto& pair : functions) {
+		delete pair.second;
+	}
 }
 
 static std::string join(const std::vector<std::string>& xs, const std::string& sep) {
@@ -208,6 +215,23 @@ void ActorCompiler::findState(Statement* stmt) {
 		// WaitStatement inside when doesn't need recursion (no nested statements)
 		findState(whenStmt->body.get());
 	}
+}
+
+Function* ActorCompiler::getFunction(const std::string& label) {
+	// Check if function already exists
+	auto it = functions.find(label);
+	if (it != functions.end()) {
+		return it->second;
+	}
+
+	// Create new function and register it
+	Function* func = new Function();
+	functions[label] = func;
+	return func;
+}
+
+std::string ActorCompiler::generateLabel() {
+	return "cont" + std::to_string(++labelIndex);
 }
 
 void ErrorMessagePolicy::handleActorWithoutWait(const std::string& sourceFile, const Actor& actor) {

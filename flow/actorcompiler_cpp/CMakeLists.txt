@@ -90,3 +90,16 @@ target_include_directories(actorcompiler_cpp_state_discovery PRIVATE ${CMAKE_CUR
 target_compile_features(actorcompiler_cpp_state_discovery PRIVATE cxx_std_17)
 target_link_libraries(actorcompiler_cpp_state_discovery PRIVATE OpenSSL::Crypto)
 add_test(NAME ActorCompilerStateDiscovery COMMAND actorcompiler_cpp_state_discovery)
+
+add_executable(actorcompiler_cpp_function_registry
+  tests/function_registry_test.cpp
+  ParseTree.cpp
+  ActorCompiler.cpp
+  Function.cpp
+  Context.cpp
+)
+target_include_directories(actorcompiler_cpp_function_registry PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(actorcompiler_cpp_function_registry PRIVATE cxx_std_17)
+target_compile_definitions(actorcompiler_cpp_function_registry PRIVATE ACTORCOMPILER_TEST_BUILD)
+target_link_libraries(actorcompiler_cpp_function_registry PRIVATE OpenSSL::Crypto)
+add_test(NAME ActorCompilerFunctionRegistry COMMAND actorcompiler_cpp_function_registry)
