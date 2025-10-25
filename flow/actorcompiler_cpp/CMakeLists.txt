@@ -5,6 +5,7 @@ cmake_minimum_required(VERSION 3.13)
 
 set(ACTORCOMPILER_CPP_SRCS
   main.cpp
+  ParseTree.cpp
   Tokenizer.cpp
   ActorParser.cpp
   ActorCompiler.cpp
