@@ -264,6 +264,8 @@ void ActorCompiler::compile(Function* func, Statement* stmt, const Context& ctx)
 		compileStatement(func, loopStmt, ctx);
 	} else if (auto* rangeForStmt = dynamic_cast<RangeForStatement*>(stmt)) {
 		compileStatement(func, rangeForStmt, ctx);
+	} else if (auto* chooseStmt = dynamic_cast<ChooseStatement*>(stmt)) {
+		compileStatement(func, chooseStmt, ctx);
 	} else {
 		// Unhandled statement type - will be implemented in later steps
 		func->writeLine("// TODO: Compile " + std::string(typeid(*stmt).name()));
@@ -491,6 +493,100 @@ void ActorCompiler::compileStatement(Function* func, RangeForStatement* stmt, co
 
 	func->indent(-1);
 	func->writeLine("}");
+}
+
+void ActorCompiler::compileStatement(Function* func, ChooseStatement* stmt, const Context& ctx) {
+	// Simplified choose/when implementation
+	// Full implementation would generate callback functions and wire them to futures
+
+	// The choose body should be a CodeBlock containing only WhenStatements
+	CodeBlock* codeBlock = dynamic_cast<CodeBlock*>(stmt->body.get());
+	if (!codeBlock) {
+		throw Error(stmt->firstSourceLine, "'choose' must be followed by a compound statement");
+	}
+
+	// Collect all when statements
+	std::vector<WhenStatement*> whenStmts;
+	for (auto& s : codeBlock->statements) {
+		WhenStatement* whenStmt = dynamic_cast<WhenStatement*>(s.get());
+		if (!whenStmt) {
+			throw Error(s->firstSourceLine, "only 'when' statements are valid in a 'choose' block");
+		}
+		whenStmts.push_back(whenStmt);
+	}
+
+	if (whenStmts.empty()) {
+		throw Error(stmt->firstSourceLine, "'choose' block must contain at least one 'when' statement");
+	}
+
+	func->writeLine("// BEGIN choose block (simplified)");
+	func->writeLine("{");
+	func->indent(+1);
+
+	// For each when clause, evaluate the future expression
+	for (size_t i = 0; i < whenStmts.size(); ++i) {
+		WhenStatement* when = whenStmts[i];
+		WaitStatement* wait = when->wait.get();
+
+		std::string futureVar = "__when_expr_" + std::to_string(i);
+		func->writeLine("StrictFuture<" + wait->result.type + "> " + futureVar + " = " + wait->futureExpression + ";");
+	}
+
+	// Check if any future is already ready (fast path)
+	for (size_t i = 0; i < whenStmts.size(); ++i) {
+		WhenStatement* when = whenStmts[i];
+		WaitStatement* wait = when->wait.get();
+		std::string futureVar = "__when_expr_" + std::to_string(i);
+
+		func->writeLine("if (" + futureVar + ".isReady()) {");
+		func->indent(+1);
+
+		// Check for error
+		func->writeLine("if (" + futureVar + ".isError()) {");
+		func->indent(+1);
+		if (!ctx.catchHandler.empty()) {
+			func->writeLine(ctx.errorVarName + " = " + futureVar + ".getError();");
+			func->writeLine("goto " + ctx.catchHandler + ";");
+		} else {
+			func->writeLine("throw " + futureVar + ".getError();");
+		}
+		func->indent(-1);
+		func->writeLine("} else {");
+		func->indent(+1);
+
+		// Extract value and compile body
+		if (wait->resultIsState) {
+			func->writeLine(wait->result.name + " = " + futureVar + ".get();");
+		} else {
+			func->writeLine(wait->result.type + " " + wait->result.name + " = " + futureVar + ".get();");
+		}
+
+		// Compile the when body
+		if (when->body) {
+			compile(func, when->body.get(), ctx);
+		}
+
+		// Jump to end of choose block
+		std::string endLabel = generateLabel();
+		func->writeLine("goto " + endLabel + "; // end of when clause " + std::to_string(i));
+		func->indent(-1);
+		func->writeLine("}");
+		func->indent(-1);
+		func->writeLine("}");
+	}
+
+	// If no future is ready, set up callbacks (simplified with TODO)
+	func->writeLine("// TODO: Set up ActorCallback for all futures");
+	func->writeLine("// actor_wait_state = ...;");
+	for (size_t i = 0; i < whenStmts.size(); ++i) {
+		std::string futureVar = "__when_expr_" + std::to_string(i);
+		func->writeLine("// " + futureVar + ".addCallbackAndClear(static_cast<ActorCallback<...>*>(this));");
+	}
+	func->writeLine("return; // Suspend until one callback fires");
+
+	func->indent(-1);
+	func->writeLine("}");
+	func->writeLine("// END choose block");
 }
 
 void ErrorMessagePolicy::handleActorWithoutWait(const std::string& sourceFile, const Actor& actor) {
