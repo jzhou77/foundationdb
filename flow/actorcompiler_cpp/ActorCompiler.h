@@ -87,6 +87,7 @@ public:
 	Function* testGetFunction(const std::string& label) { return getFunction(label); }
 	std::string testGenerateLabel() { return generateLabel(); }
 	size_t testGetFunctionCount() const { return functions.size(); }
+	void testCompile(Function* func, Statement* stmt, const Context& ctx) { compile(func, stmt, ctx); }
 #endif
 
 private:
@@ -98,6 +99,18 @@ private:
 
 	// Generate a unique continuation label
 	std::string generateLabel();
+
+	// Statement compilation - main dispatcher
+	void compile(Function* func, Statement* stmt, const Context& ctx);
+
+	// Statement compilation - specific statement types
+	void compileStatement(Function* func, PlainOldCodeStatement* stmt, const Context& ctx);
+	void compileStatement(Function* func, StateDeclarationStatement* stmt, const Context& ctx);
+	void compileStatement(Function* func, ReturnStatement* stmt, const Context& ctx);
+	void compileStatement(Function* func, BreakStatement* stmt, const Context& ctx);
+	void compileStatement(Function* func, ContinueStatement* stmt, const Context& ctx);
+	void compileStatement(Function* func, CodeBlock* stmt, const Context& ctx);
+	void compileStatement(Function* func, WaitStatement* stmt, const Context& ctx);
 
 	// Code generation methods (to be implemented in Step 5)
 	void writeActorFunction(std::ostream& writer, const std::string& fullReturnType);

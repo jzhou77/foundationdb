@@ -27,6 +27,7 @@
 #include <utility>
 #include <cstdint>
 #include <cstddef>
+#include <typeinfo>
 #include <openssl/sha.h>
 
 namespace actorcompiler {
@@ -232,6 +233,139 @@ Function* ActorCompiler::getFunction(const std::string& label) {
 
 std::string ActorCompiler::generateLabel() {
 	return "cont" + std::to_string(++labelIndex);
+}
+
+void ActorCompiler::compile(Function* func, Statement* stmt, const Context& ctx) {
+	if (!stmt)
+		return;
+
+	// Dispatch to appropriate compilation method based on statement type
+	if (auto* plainCode = dynamic_cast<PlainOldCodeStatement*>(stmt)) {
+		compileStatement(func, plainCode, ctx);
+	} else if (auto* stateDecl = dynamic_cast<StateDeclarationStatement*>(stmt)) {
+		compileStatement(func, stateDecl, ctx);
+	} else if (auto* returnStmt = dynamic_cast<ReturnStatement*>(stmt)) {
+		compileStatement(func, returnStmt, ctx);
+	} else if (auto* breakStmt = dynamic_cast<BreakStatement*>(stmt)) {
+		compileStatement(func, breakStmt, ctx);
+	} else if (auto* continueStmt = dynamic_cast<ContinueStatement*>(stmt)) {
+		compileStatement(func, continueStmt, ctx);
+	} else if (auto* codeBlock = dynamic_cast<CodeBlock*>(stmt)) {
+		compileStatement(func, codeBlock, ctx);
+	} else if (auto* waitStmt = dynamic_cast<WaitStatement*>(stmt)) {
+		compileStatement(func, waitStmt, ctx);
+	} else {
+		// Unhandled statement type - will be implemented in later steps
+		func->writeLine("// TODO: Compile " + std::string(typeid(*stmt).name()));
+	}
+}
+
+void ActorCompiler::compileStatement(Function* func, PlainOldCodeStatement* stmt, const Context& ctx) {
+	// Plain old code just passes through
+	func->writeLine(stmt->code);
+}
+
+void ActorCompiler::compileStatement(Function* func, StateDeclarationStatement* stmt, const Context& ctx) {
+	// State declarations are handled in the class definition, not in the function body
+	// Generate initialization code if there's an initializer
+	if (!stmt->decl.initializer.empty()) {
+		if (stmt->decl.initializerConstructorSyntax) {
+			func->writeLine(stmt->decl.name + " = " + stmt->decl.type + "(" + stmt->decl.initializer + ");");
+		} else {
+			func->writeLine(stmt->decl.name + " = " + stmt->decl.initializer + ";");
+		}
+	}
+}
+
+void ActorCompiler::compileStatement(Function* func, ReturnStatement* stmt, const Context& ctx) {
+	// Generate return statement
+	// For now, just emit the return directly - full actor return logic will be added later
+	if (stmt->expression.empty()) {
+		func->writeLine("return Void();");
+	} else {
+		func->writeLine("return " + stmt->expression + ";");
+	}
+}
+
+void ActorCompiler::compileStatement(Function* func, BreakStatement* stmt, const Context& ctx) {
+	// Generate goto to break target
+	if (ctx.breakLabel.empty()) {
+		throw Error(stmt->firstSourceLine, "break statement outside of loop");
+	}
+	func->writeLine("goto " + ctx.breakLabel + ";");
+}
+
+void ActorCompiler::compileStatement(Function* func, ContinueStatement* stmt, const Context& ctx) {
+	// Generate goto to continue target
+	if (ctx.continueLabel.empty()) {
+		throw Error(stmt->firstSourceLine, "continue statement outside of loop");
+	}
+	func->writeLine("goto " + ctx.continueLabel + ";");
+}
+
+void ActorCompiler::compileStatement(Function* func, CodeBlock* stmt, const Context& ctx) {
+	// Compile each statement in the block sequentially
+	for (auto& s : stmt->statements) {
+		compile(func, s.get(), ctx);
+	}
+}
+
+void ActorCompiler::compileStatement(Function* func, WaitStatement* stmt, const Context& ctx) {
+	// Generate a continuation label for code after the wait
+	std::string contLabel = generateLabel();
+	Function* contFunc = getFunction(contLabel);
+
+	// Emit the wait expression assignment to a StrictFuture
+	func->writeLine("StrictFuture<" + stmt->result.type + "> __when_expr = " + stmt->futureExpression + ";");
+
+	// Check if the future is already ready (fast path optimization)
+	func->writeLine("if (__when_expr.isReady()) {");
+	func->indent(+1);
+
+	// Check for error in ready future
+	func->writeLine("if (__when_expr.isError()) {");
+	func->indent(+1);
+	if (!ctx.catchHandler.empty()) {
+		// Jump to error handler if one is set
+		func->writeLine(ctx.errorVarName + " = __when_expr.getError();");
+		func->writeLine("goto " + ctx.catchHandler + ";");
+	} else {
+		// Re-throw if no handler
+		func->writeLine("throw __when_expr.getError();");
+	}
+	func->indent(-1);
+	func->writeLine("} else {");
+	func->indent(+1);
+
+	// Extract value from ready future
+	if (stmt->resultIsState) {
+		// State variable - assign directly to member
+		func->writeLine(stmt->result.name + " = __when_expr.get();");
+		func->writeLine("goto " + contLabel + ";");
+	} else {
+		// Local variable - pass as parameter to continuation (not yet supported)
+		func->writeLine("// TODO: Non-state wait result not fully implemented");
+		func->writeLine(stmt->result.type + " " + stmt->result.name + " = __when_expr.get();");
+		func->writeLine("goto " + contLabel + ";");
+	}
+	func->indent(-1);
+	func->writeLine("}");
+	func->indent(-1);
+
+	func->writeLine("} else {");
+	func->indent(+1);
+	// Future not ready - need to set up async callback (simplified for now)
+	func->writeLine("// TODO: Set up ActorCallback and register with future");
+	func->writeLine("// __when_expr.addCallbackAndClear(static_cast<ActorCallback<...>*>(this));");
+	func->writeLine("// actor_wait_state = ...;");
+	func->writeLine("return; // Suspend until callback fires");
+	func->indent(-1);
+	func->writeLine("}");
+
+	// Emit continuation label
+	func->writeLine("");
+	func->writeLine(contLabel + ":");
+	// The continuation function will be filled in by subsequent compileStatement calls
 }
 
 void ErrorMessagePolicy::handleActorWithoutWait(const std::string& sourceFile, const Actor& actor) {

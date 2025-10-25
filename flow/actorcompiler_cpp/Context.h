@@ -21,31 +21,34 @@
 #ifndef ACTORCOMPILER_CONTEXT_H
 #define ACTORCOMPILER_CONTEXT_H
 
-#include "Function.h"
-#include <memory>
+#include <string>
 
 namespace actorcompiler {
 
 // Compilation context - tracks current code generation state
 struct Context {
-	Function* target = nullptr; // Current function being written to
-	Function* next = nullptr; // Next continuation function
-	Function* breakF = nullptr; // Break target function
-	Function* continueF = nullptr; // Continue target function
-	Function* catchFErr = nullptr; // Error handler function
-	int tryLoopDepth = 0; // Loop depth inside try block
+	std::string targetLabel; // Current target label for gotos
+	std::string breakLabel; // Break target label
+	std::string continueLabel; // Continue target label
+	std::string catchHandler; // Catch handler label
+	std::string errorVarName; // Error variable name
+	std::string errorCodeVarName; // Error code variable name
 
-	// Mark target as unreachable
-	void unreachable() { target = nullptr; }
+	// Create an unreachable context
+	static Context createUnreachable() {
+		Context ctx;
+		ctx.targetLabel = "UNREACHABLE";
+		return ctx;
+	}
 
 	// Create context with new target
-	Context withTarget(Function* newTarget) const;
+	Context withTarget(const std::string& newTarget) const;
 
 	// Create context for loop
-	Context loopContext(Function* newTarget, Function* breakF, Function* continueF, int deltaLoopDepth) const;
+	Context loopContext(const std::string& breakLbl, const std::string& continueLbl) const;
 
 	// Create context with new catch handler
-	Context withCatch(Function* newCatchFErr) const;
+	Context withCatch(const std::string& errVar, const std::string& errCode, const std::string& handler) const;
 
 	// Clone context
 	Context clone() const;

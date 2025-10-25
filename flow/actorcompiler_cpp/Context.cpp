@@ -2,27 +2,24 @@
 
 namespace actorcompiler {
 
-Context Context::withTarget(Function* newTarget) const {
+Context Context::withTarget(const std::string& newTarget) const {
 	Context c = *this;
-	c.target = newTarget;
+	c.targetLabel = newTarget;
 	return c;
 }
 
-Context Context::loopContext(Function* newTarget,
-                             Function* breakFunc,
-                             Function* continueFunc,
-                             int deltaLoopDepth) const {
+Context Context::loopContext(const std::string& breakLbl, const std::string& continueLbl) const {
 	Context c = *this;
-	c.target = newTarget;
-	c.breakF = breakFunc;
-	c.continueF = continueFunc;
-	c.tryLoopDepth += deltaLoopDepth;
+	c.breakLabel = breakLbl;
+	c.continueLabel = continueLbl;
 	return c;
 }
 
-Context Context::withCatch(Function* newCatchFErr) const {
+Context Context::withCatch(const std::string& errVar, const std::string& errCode, const std::string& handler) const {
 	Context c = *this;
-	c.catchFErr = newCatchFErr;
+	c.errorVarName = errVar;
+	c.errorCodeVarName = errCode;
+	c.catchHandler = handler;
 	return c;
 }
 

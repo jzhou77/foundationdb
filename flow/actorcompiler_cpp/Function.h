@@ -25,6 +25,7 @@
 #include <vector>
 #include <memory>
 #include <sstream>
+#include <ostream>
 
 namespace actorcompiler {
 
@@ -48,6 +49,9 @@ public:
 
 	// Get accumulated body text
 	std::string getBodyText() const { return body.str(); }
+
+	// Write body to output stream (for testing)
+	void writeToStream(std::ostream& out) const { out << body.str(); }
 
 	// Check if function was called
 	bool wasCalled() const { return called; }
