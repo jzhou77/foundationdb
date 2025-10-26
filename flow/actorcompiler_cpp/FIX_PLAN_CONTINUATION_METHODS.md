@@ -627,6 +627,362 @@ return 0;
 ## Next Actions
 
 1. ✅ Create this plan document
-2. ⏳ Examine ActorCompiler.cpp code generation
-3. ⏳ Create detailed implementation checklist
+2. ✅ Examine ActorCompiler.cpp code generation
+3. ✅ Create detailed implementation checklist
 4. ⏳ Begin implementation Phase 2
+
+---
+
+## Investigation Findings (2025-10-25)
+
+### Finding 1: Code Generation Architecture
+**Status**: ✅ Understood
+
+The actor compiler has a well-structured architecture:
+
+**Key Classes:**
+- `ActorCompiler` (`ActorCompiler.h:49-155`, `ActorCompiler.cpp`)
+  - Main compiler orchestrator
+  - Tracks state variables in `std::set<std::string> stateVariables`
+  - Tracks state variable types in `std::map<std::string, std::string> stateVariableTypes`
+  - Function registry: `std::map<std::string, Function*> functions`
+  - Callback tracking: `std::vector<CallbackInfo> callbacks`
+
+- `Function` (`Function.h`)
+  - Represents generated C++ function
+  - Accumulates body text via `writeLine()` methods
+  - Has `name`, `returnType`, `formalParameters`
+
+**Code Generation Flow**:
+1. `ActorCompiler::write()` - Main entry point
+2. State discovery: `findState()` - Already working! ✅
+3. Compile actor body: `compile(body, actor.body, ctx)`
+4. Generate state class: Lines 199-221
+5. Generate actor class: `writeActorClass()` - Lines 855-997
+6. Generate functions: `writeFunctions()` / `writeFunction()` - Lines 1041-1114
+
+### Finding 2: State Variable Tracking Works!
+**Status**: ✅ Already Implemented
+**Location**: `ActorCompiler.cpp:264-302`
+
+The `findState()` method already:
+- Recursively traverses AST
+- Finds `StateDeclarationStatement` nodes
+- Adds to `stateVariables` set
+- Stores types in `stateVariableTypes` map
+- Generates member declarations (lines 211-219)
+
+**Action**: No changes needed here! ✅
+
+### Finding 3: State Class Generation
+**Status**: ⚠️ Needs Update
+**Location**: `ActorCompiler.cpp:199-221`
+
+**Current Structure**:
+```cpp
+writer << "class " << stateClassName << " {\n";
+writer << "public:\n";
+writeStateConstructor(writer);
+writeStateDestructor(writer);
+writeFunctions(writer);  // Emits body() and other methods
+// State variable declarations
+writer << "};\n";
+```
+
+**Issues**:
+1. ❌ Not templated - needs `template <class ActorType>`
+2. ✅ State variables already declared correctly
+3. ✅ Constructor/destructor generated
+
+**Required Changes**:
+- Add template declaration before line 202
+- Update casts in function bodies to use template parameter
+
+### Finding 4: Actor Class Generation
+**Status**: ✅ Mostly Correct, Minor Updates Needed
+**Location**: `ActorCompiler.cpp:855-997`
+
+**Current Structure**:
+```cpp
+class SimpleWaitActor final :
+    public Actor<ReturnType>,
+    public ActorCallback<...>, ...
+    public FastAllocated<...>,
+    public SimpleWaitActorState
+```
+
+**What's Working**:
+- ✅ Inheritance structure correct
+- ✅ `destroy()` method (lines 889-905)
+- ✅ `cancel()` method (lines 933-950)
+- ✅ Callback methods generated (lines 952-994)
+- ✅ ActorIdentifier and ActiveActorHelper members (lines 885-887)
+
+**Issues Found**:
+1. ❌ Constructor doesn't initialize `activeActorHelper(__actorIdentifier)` (line 916)
+2. ❌ No ACAC instrumentation in constructor
+3. ❌ No lineage support in constructor
+4. ❌ Constructor calls `body(0)` instead of `a_body1()` (line 929)
+5. ❌ Callbacks use `freeAfter()` instead of `a_exitChoose1()` (lines 957, 975)
+6. ❌ Callbacks call `body(0)` instead of when methods (line 969)
+7. ❌ No try-catch in callbacks (should wrap when/catch calls)
+8. ❌ a_callback_error throws instead of calling catch method (line 991)
+9. ❌ Missing rvalue overload for `a_callback_fire()`
+
+### Finding 5: Function Generation - The Core Issue
+**Status**: 🔴 Needs Complete Rewrite
+**Location**: `ActorCompiler.cpp:1052-1114`
+
+**Current Pattern** (WRONG):
+```cpp
+int body(int loopDepth) {
+    // Resume switch with goto (lines 1074-1084)
+    if (actor_wait_state > 0) {
+        switch (actor_wait_state) {
+            case 1: goto resume_1;
+        }
+    }
+
+    // Function body text
+    // Contains goto labels and goto statements
+
+    return loopDepth;
+}
+```
+
+**Issues**:
+1. ❌ Uses goto-based resume (lines 1074-1084)
+2. ❌ Single method instead of continuation methods
+3. ❌ No try-catch wrapper
+4. ❌ Function name is "body" not "a_body1"
+
+**Required Changes**:
+- Remove resume switch/goto generation
+- Split into multiple continuation methods
+- Add try-catch wrappers
+- Rename to a_body1, a_body1cont1, etc.
+
+### Finding 6: Wait Statement Compilation
+**Status**: ⏳ Need to Examine
+**Location**: Need to find `compileStatement(WaitStatement*)`
+
+**Action**: Next step is to examine how wait statements are currently compiled and how to transform them to generate continuation methods.
+
+### Finding 7: Function Registry System
+**Status**: ✅ Perfect for Our Needs!
+**Location**: `ActorCompiler.cpp:304-321`
+
+The function registry is exactly what we need:
+
+```cpp
+Function* ActorCompiler::getFunction(const std::string& label) {
+    auto it = functions.find(label);
+    if (it != functions.end()) {
+        return it->second;
+    }
+    Function* func = new Function();
+    func->name = label;
+    functions[label] = func;
+    return func;
+}
+```
+
+**Usage**:
+- Call `getFunction("a_body1")` to get/create body function
+- Call `getFunction("a_body1cont1")` to get/create continuation
+- Call `getFunction("a_body1when1")` to get/create when handler
+- All functions written by `writeFunctions()` (line 1041)
+
+**Action**: Use this system to generate all continuation methods! ✅
+
+### Finding 8: Callback Infrastructure
+**Status**: ✅ Structure Exists, Needs Updates
+**Location**: `ActorCompiler.h:70-80`
+
+**CallbackInfo Structure**:
+```cpp
+struct CallbackInfo {
+    std::string type;        // T from Future<T>
+    int index;              // Callback index
+    std::string continueLabel;  // ⚠️ Currently not used correctly
+    std::string resultName;     // Variable assigned from wait()
+    bool resultIsState;         // Whether result is state member
+    std::string errorHandler;   // Error handler label
+    std::string errorVarName;   // Error variable name
+};
+```
+
+**What's There**:
+- ✅ Tracks callback type and index
+- ✅ Has `continueLabel` field
+- ✅ Knows result variable name and if it's state
+
+**Issues**:
+- ⚠️ `continueLabel` exists but not used correctly
+- ⚠️ Should point to when method, not body
+
+**Action**: Update wait compilation to set `continueLabel = "a_body1when" + std::to_string(waitNum)`
+
+---
+
+## Detailed Implementation Checklist
+
+### Phase 1: Template State Class ✅ READY TO IMPLEMENT
+
+**File**: `ActorCompiler.cpp`, line 199-221
+
+**Changes**:
+```cpp
+// Before line 202, add:
+writer << "template <class " << className << ">\n";
+
+// Line 202 stays the same:
+writer << "class " << stateClassName << " {\n";
+
+// Line 875, update actor class inheritance:
+writer << "class " << className << " final : "
+       << "public Actor<" << returnType << ">, "
+       << callbackBases
+       << "public FastAllocated<" << fullClassName << ">, "
+       << "public " << stateClassName << "<" << className << "> {\n";
+```
+
+**Affected Casts**: Need to update casts in function bodies from `Actor<T>*` to `ActorType*`
+- But wait - casts in function bodies currently use `Actor<T>*` which is runtime base
+- Template parameter needed for accessing state methods
+- **Decision**: Functions should cast to `ActorType*` (template param) not `Actor<T>*`
+
+**Testing**: Generate simple_wait and verify template structure
+
+---
+
+### Phase 2: Rename Body Function ✅ READY TO IMPLEMENT
+
+**File**: `ActorCompiler.cpp`
+
+**Changes**:
+1. Line 177: `Function* body = getFunction("a_body1");`
+2. Line 929: `writer << "\t\tthis->a_body1();\n";`
+3. Line 1074: Update function name check: `if (func->name == "a_body1" && !callbacks.empty())`
+
+**Testing**: Verify function is named `a_body1` in generated code
+
+---
+
+### Phase 3: Add Try-Catch Wrapper ✅ READY TO IMPLEMENT
+
+**File**: `ActorCompiler.cpp:1052-1114`
+
+**Changes in `writeFunction()`**:
+
+```cpp
+void ActorCompiler::writeFunction(std::ostream& writer, Function* func) {
+    // ... existing signature code ...
+
+    writer << " {\n";
+
+    // Remove resume switch (delete lines 1074-1084)
+
+    // Add try-catch for body functions
+    bool isBodyFunction = (func->name.find("a_body") == 0) ||
+                          (func->name.find("a_when") == 0) ||
+                          (func->name.find("a_cont") == 0);
+
+    if (isBodyFunction) {
+        writer << "\t\ttry {\n";
+    }
+
+    // ... existing body text output (with extra indent if try) ...
+
+    if (isBodyFunction) {
+        std::string catchHandler = "a_body1Catch1";  // TODO: derive from func name
+        writer << "\t\t}\n";
+        writer << "\t\tcatch (Error& error) {\n";
+        writer << "\t\t\tloopDepth = " << catchHandler << "(error, loopDepth);\n";
+        writer << "\t\t} catch (...) {\n";
+        writer << "\t\t\tloopDepth = " << catchHandler << "(unknown_error(), loopDepth);\n";
+        writer << "\t\t}\n";
+    }
+
+    writer << "\t\treturn loopDepth;\n";
+    writer << "\t}\n";
+}
+```
+
+**Testing**: Verify try-catch appears in generated a_body1
+
+---
+
+### Phase 4: Generate Catch Method ✅ READY TO IMPLEMENT
+
+**File**: `ActorCompiler.cpp`, in `write()` after compiling body
+
+**Add after line 192**:
+```cpp
+// Generate catch handler
+Function* catchFunc = getFunction("a_body1Catch1");
+catchFunc->returnType = "int";
+catchFunc->formalParameters = {"Error error", "int loopDepth=0"};
+catchFunc->writeLine("this->~" + stateClassName + "();");
+catchFunc->writeLine("static_cast<" + className + "*>(this)->sendErrorAndDelPromiseRef(error);");
+catchFunc->writeLine("loopDepth = 0;");
+catchFunc->writeLine("return loopDepth;");
+```
+
+**Testing**: Verify `a_body1Catch1` method appears in generated code
+
+---
+
+### Phase 5: Update Constructor ✅ READY TO IMPLEMENT
+
+**File**: `ActorCompiler.cpp:916-930`
+
+**Replace constructor generation**:
+```cpp
+// Line 916-926, replace with:
+writeTemplate(writer);
+writer << "\t" << className << "(" << join(parameterList(), ", ") << ")\n";
+writer << "\t\t : Actor<" << returnType << ">(),\n";
+writer << "\t\t   " << fullStateClassName << "(" << join(paramNames, ", ") << "),\n";
+writer << "\t\t   activeActorHelper(__actorIdentifier)\n";
+writer << "\t{\n";
+writer << "\t\t#ifdef WITH_ACAC\n";
+writer << "\t\tstatic constexpr ActorBlockIdentifier __identifier = UID(...);\n";  // TODO: generate UID
+writer << "\t\tActorExecutionContextHelper __helper(this->activeActorHelper.actorID, __identifier);\n";
+writer << "\t\t#endif // WITH_ACAC\n";
+writer << "\t\t#ifdef ENABLE_SAMPLING\n";
+writer << "\t\tthis->lineage.setActorName(\"" << actor.name << "\");\n";
+writer << "\t\tLineageScope _(&this->lineage);\n";
+writer << "\t\t#endif\n";
+writer << "\t\tthis->a_body1();\n";
+writer << "\t}\n";
+```
+
+**Testing**: Verify constructor initializes all bases and calls a_body1()
+
+---
+
+### Phase 6: Wait Statement Analysis ⏳ NEXT STEP
+
+**Action**: Find and examine `compileStatement(Function* func, WaitStatement* stmt, const Context& ctx)`
+
+**Need to understand**:
+1. How wait expressions are currently compiled
+2. Where goto labels are generated
+3. How to split code at wait boundaries
+4. How to generate continuation methods
+
+**Expected location**: `ActorCompiler.cpp`, search for "WaitStatement"
+
+---
+
+## Next Immediate Actions
+
+1. ✅ Document current architecture (DONE)
+2. ⏳ Examine wait statement compilation code
+3. ⏳ Implement Phase 1-5 changes (template, rename, try-catch, catch method, constructor)
+4. ⏳ Test with simple_wait.actor.cpp
+5. ⏳ Implement wait statement transformation
+6. ⏳ Generate continuation methods
+7. ⏳ Update callbacks
+8. ⏳ Full testing
