@@ -60,6 +60,7 @@ private:
 
 	// State variables and function registry
 	std::set<std::string> stateVariables;
+	std::map<std::string, std::string> stateVariableTypes; // varName -> type
 	std::map<std::pair<uint64_t, uint64_t>, std::string> uidObjects;
 	std::map<std::string, Function*> functions; // label -> Function mapping
 	int labelIndex; // Counter for generating unique continuation labels

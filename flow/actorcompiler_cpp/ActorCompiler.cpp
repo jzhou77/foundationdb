@@ -207,10 +207,15 @@ void ActorCompiler::write(std::ostream& writer) {
 	writeStateDestructor(writer);
 	writeFunctions(writer);
 
-	// State variables
+	// State variables with types
 	for (const auto& varName : stateVariables) {
-		// TODO: Track source line and type for each state variable
-		writer << "\t// TODO: " << varName << ";\n";
+		auto typeIt = stateVariableTypes.find(varName);
+		if (typeIt != stateVariableTypes.end()) {
+			writer << "\t" << typeIt->second << " " << varName << ";\n";
+		} else {
+			// Fallback if type not tracked (shouldn't happen with proper discovery)
+			writer << "\t// TODO: " << varName << ";\n";
+		}
 	}
 
 	writer << "};\n";
@@ -263,6 +268,7 @@ void ActorCompiler::findState(Statement* stmt) {
 	// Check if this is a state declaration
 	if (auto* stateDecl = dynamic_cast<StateDeclarationStatement*>(stmt)) {
 		stateVariables.insert(stateDecl->decl.name);
+		stateVariableTypes[stateDecl->decl.name] = stateDecl->decl.type;
 		return;
 	}
 
@@ -942,16 +948,23 @@ void ActorCompiler::writeFunctions(std::ostream& writer) {
 }
 
 void ActorCompiler::writeFunction(std::ostream& writer, Function* func) {
-	// Function signature
-	std::string returnTypeStr = func->returnType.empty() ? "" : func->returnType + " ";
+	// Function signature with proper formal parameters
+	std::string returnTypeStr = func->returnType.empty() ? "int" : func->returnType + " ";
 	writer << "\t" << returnTypeStr << func->name << "(";
 
-	// TODO: Format formal parameters properly
-	writer << "int loopDepth";
+	// Formal parameters: loopDepth for continuation tracking
+	if (!func->formalParameters.empty()) {
+		writer << join(func->formalParameters, ", ");
+	} else {
+		writer << "int loopDepth";
+	}
 
 	writer << ")";
 
-	// TODO: Add function specifiers (const, override, etc.)
+	// Function specifiers
+	if (!func->specifiers.empty()) {
+		writer << " " << func->specifiers;
+	}
 
 	writer << " {\n";
 

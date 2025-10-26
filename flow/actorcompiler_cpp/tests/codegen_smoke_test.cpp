@@ -371,6 +371,35 @@ ACTOR Future<int> monitored() {
 	std::cout << "✓ Test passed\n\n";
 }
 
+void testStateVariableTypes() {
+	std::cout << "Test: State variable types are emitted correctly\n";
+
+	std::string sourceCode = R"(
+ACTOR Future<int> multiState() {
+	state int x = 5;
+	state std::string name = "test";
+	state double value = 3.14;
+	return x;
+}
+)";
+
+	ErrorMessagePolicy policy;
+	ActorParser parser(sourceCode, "test.actor.cpp", policy, /*generateProbes*/ false);
+
+	std::ostringstream output;
+	parser.write(output, "out.cpp");
+
+	std::string code = output.str();
+	std::cout << "Generated code:\n" << code << "\n";
+
+	// State variable declarations with types should be present
+	assert(code.find("int x;") != std::string::npos);
+	assert(code.find("std::string name;") != std::string::npos);
+	assert(code.find("double value;") != std::string::npos);
+
+	std::cout << "✓ Test passed\n\n";
+}
+
 int main() {
 	std::cout << "=== Code Generation Smoke Tests ===\n\n";
 
@@ -387,6 +416,7 @@ int main() {
 		testConstructorAndCancel();
 		testTemplateActor();
 		testProbesEnabledDisabled();
+		testStateVariableTypes();
 
 		std::cout << "All tests passed!\n";
 		return 0;
