@@ -116,9 +116,43 @@ static void writeTemplate(std::ostream& w,
 }
 
 void ActorCompiler::write(std::ostream& writer) {
-	// Minimal scaffold: only emit a wrapper function with a stub body
+	// Determine full return type (Future<T> or void)
 	const std::string fullReturnType =
 	    actor.returnType.empty() ? std::string("void") : (std::string("Future<") + actor.returnType + ">");
+
+	// Generate unique class name to avoid collisions
+	int classNameSuffix = 0;
+	std::string baseClassName = std::string(1, (char)std::toupper(actor.name[0])) + actor.name.substr(1) + "Actor";
+
+	// Add prefix for forward declarations or namespaces to avoid collisions
+	std::string classPrefix;
+	if (!actor.enclosingClass.empty() && actor.isForwardDeclaration) {
+		classPrefix = actor.enclosingClass;
+		// Replace :: with _
+		for (size_t i = 0; i < classPrefix.length(); ++i) {
+			if (classPrefix[i] == ':')
+				classPrefix[i] = '_';
+		}
+		classPrefix += "_";
+	} else if (!actor.nameSpace.empty()) {
+		classPrefix = actor.nameSpace;
+		for (size_t i = 0; i < classPrefix.length(); ++i) {
+			if (classPrefix[i] == ':')
+				classPrefix[i] = '_';
+		}
+		classPrefix += "_";
+	}
+
+	className = classPrefix + baseClassName;
+	// TODO: Check usedClassNames and increment suffix if needed
+	if (classNameSuffix > 0) {
+		className += std::to_string(classNameSuffix);
+	}
+
+	// Build full class name with template actuals
+	fullClassName = className + getTemplateActuals();
+	stateClassName = className + "State";
+	std::string fullStateClassName = stateClassName + getTemplateActuals();
 
 	// Forward declaration handling
 	if (actor.isForwardDeclaration) {
@@ -134,20 +168,63 @@ void ActorCompiler::write(std::ostream& writer) {
 		return;
 	}
 
-	writeTemplate(writer, actor.templateFormals, actor.sourceLine, lineNumbersEnabled, sourceFile);
-	if (lineNumbersEnabled) {
-		writer << "\t\t\t\t\t\t\t\t\t\t\t\t\t\t#line " << actor.sourceLine << " \"" << sourceFile << "\"\n";
+	// Discover state variables from actor body
+	if (actor.body) {
+		findState(actor.body.get());
 	}
-	for (auto const& attr : actor.attributes)
-		writer << attr << ' ';
-	if (actor.isStatic)
-		writer << "static ";
-	writer << fullReturnType << ' ' << (actor.nameSpace.empty() ? std::string() : actor.nameSpace + "::") << actor.name
-	       << "( " << join(paramList(actor.parameters), ", ") << " ) {\n";
-	if (!actor.returnType.empty()) {
-		writer << "\treturn " << fullReturnType << "();\n";
+
+	// Create the body function and compile the actor body
+	Function* body = getFunction("body");
+	Context bodyContext = Context::createUnreachable();
+
+	// TODO: Add catch handler for error handling
+	// bodyContext.catchHandler = getCatchFunction(body->name);
+
+	// Compile the actor body
+	if (actor.body) {
+		compile(body, actor.body.get(), bodyContext);
 	}
-	writer << "}\n";
+
+	// Add implicit return if needed
+	if (actor.returnType.empty() && !body->endIsUnreachable) {
+		body->writeLine("return Void();");
+	}
+
+	// Begin namespace if top-level and no explicit namespace
+	if (isTopLevel && actor.nameSpace.empty()) {
+		writer << "namespace {\n";
+	}
+
+	// ===== Write State Class =====
+	writer << "// This generated class is to be used only via " << actor.name << "()\n";
+	actorcompiler::writeTemplate(writer, actor.templateFormals, actor.sourceLine, lineNumbersEnabled, sourceFile);
+	lineNumber(writer, actor.sourceLine);
+	writer << "class " << stateClassName << " {\n";
+	writer << "public:\n";
+
+	lineNumber(writer, actor.sourceLine);
+	writeStateConstructor(writer);
+	writeStateDestructor(writer);
+	writeFunctions(writer);
+
+	// State variables
+	for (const auto& varName : stateVariables) {
+		// TODO: Track source line and type for each state variable
+		writer << "\t// TODO: " << varName << ";\n";
+	}
+
+	writer << "};\n";
+
+	// ===== Write Actor Class =====
+	writeActorClass(writer, fullStateClassName, body);
+
+	// End namespace if we started one
+	if (isTopLevel && actor.nameSpace.empty()) {
+		writer << "} // namespace\n";
+	}
+
+	// ===== Write Actor Wrapper Function =====
+	writeActorFunction(writer, fullReturnType);
 
 	// Emit ACTOR_TEST_CASE macro if present
 	if (!actor.testCaseParameters.empty()) {
@@ -678,6 +755,273 @@ void ActorCompiler::compileStatement(Function* func, ThrowStatement* stmt, const
 		}
 	}
 }
+
+// ========== Code Generation Main Methods ==========
+
+void ActorCompiler::writeActorFunction(std::ostream& writer, const std::string& fullReturnType) {
+	writeTemplate(writer);
+	lineNumber(writer, actor.sourceLine);
+
+	// Write attributes
+	for (const auto& attr : actor.attributes) {
+		writer << attr << " ";
+	}
+
+	// Write static keyword if applicable
+	if (actor.isStatic) {
+		writer << "static ";
+	}
+
+	// Write function signature
+	std::string nameSpace = actor.nameSpace.empty() ? "" : actor.nameSpace + "::";
+	writer << fullReturnType << " " << nameSpace << actor.name << "( " << join(parameterList(), ", ") << " ) {\n";
+
+	lineNumber(writer, actor.sourceLine);
+
+	// Construct the actor instance
+	std::string newActor = "new " + fullClassName + "(";
+	std::vector<std::string> paramNames;
+	for (const auto& p : actor.parameters) {
+		paramNames.push_back(p.name);
+	}
+	newActor += join(paramNames, ", ") + ")";
+
+	// Return the actor or just construct it
+	if (!actor.returnType.empty()) {
+		writer << "\treturn Future<" << actor.returnType << ">(" << newActor << ");\n";
+	} else {
+		writer << "\t" << newActor << ";\n";
+	}
+
+	writer << "}\n";
+}
+
+void ActorCompiler::writeActorClass(std::ostream& writer, const std::string& fullStateClassName, Function* body) {
+	// Comment indicating generated class
+	writer << "// This generated class is to be used only via " << actor.name << "()\n";
+
+	writeTemplate(writer);
+	lineNumber(writer, actor.sourceLine);
+
+	// TODO: Generate callback base classes from callbacks vector
+	std::string callbackBases = ""; // Will be implemented when we add callback support
+
+	// Class declaration with inheritance
+	std::string returnType = actor.returnType.empty() ? "void" : actor.returnType;
+	writer << "class " << className << " final : public Actor<" << returnType << ">, " << callbackBases
+	       << "public FastAllocated<" << fullClassName << ">, public " << fullStateClassName << " {\n";
+	writer << "public:\n";
+	writer << "\tusing FastAllocated<" << fullClassName << ">::operator new;\n";
+	writer << "\tusing FastAllocated<" << fullClassName << ">::operator delete;\n";
+
+	// Generate actor identifier
+	auto actorIdentifierKey = sourceFile + ":" + actor.name;
+	auto actorIdentifier = getUidFromString(actorIdentifierKey);
+	uidObjects[actorIdentifier] = actorIdentifierKey;
+
+	writer << "\tstatic constexpr ActorIdentifier __actorIdentifier = UID(" << actorIdentifier.first << "UL, "
+	       << actorIdentifier.second << "UL);\n";
+	writer << "\tActiveActorHelper activeActorHelper;\n";
+
+	// Destroy method
+	writer << "#pragma clang diagnostic push\n";
+	writer << "#pragma clang diagnostic ignored \"-Wdelete-non-virtual-dtor\"\n";
+	if (!actor.returnType.empty()) {
+		writer << "\tvoid destroy() override {\n";
+		writer << "\t\tactiveActorHelper.~ActiveActorHelper();\n";
+		writer << "\t\tstatic_cast<Actor<" << actor.returnType << ">*>(this)->~Actor();\n";
+		writer << "\t\toperator delete(this);\n";
+		writer << "\t}\n";
+	} else {
+		writer << "\tvoid destroy() {\n";
+		writer << "\t\tactiveActorHelper.~ActiveActorHelper();\n";
+		writer << "\t\tstatic_cast<Actor<void>*>(this)->~Actor();\n";
+		writer << "\t\toperator delete(this);\n";
+		writer << "\t}\n";
+	}
+	writer << "#pragma clang diagnostic pop\n";
+
+	// TODO: Friend declarations for callbacks
+
+	lineNumber(writer, actor.sourceLine);
+
+	// Constructor - simplified for now, will expand later
+	writeTemplate(writer);
+	writer << "\t" << className << "(" << join(parameterList(), ", ") << ") : " << fullStateClassName << "("
+	       << join(
+	              [&]() {
+		              std::vector<std::string> names;
+		              for (const auto& p : actor.parameters) {
+			              names.push_back(p.name);
+		              }
+		              return names;
+	              }(),
+	              ", ")
+	       << ") {\n";
+	writer << "\t\t// TODO: Initialize actor state\n";
+	writer << "\t\t// Call body function\n";
+	writer << "\t\t// " << body->name << "();\n";
+	writer << "\t}\n";
+
+	// TODO: Cancel function if cancellable
+
+	writer << "};\n";
+}
+
+void ActorCompiler::writeStateConstructor(std::ostream& writer) {
+	writer << "\t" << stateClassName << "(" << join(parameterList(), ", ") << ")";
+
+	// Member initializers
+	bool firstInitializer = true;
+	for (const auto& varName : stateVariables) {
+		// Find the corresponding state variable in actor.parameters or locals
+		// For now, just initialize actor parameters
+		for (const auto& param : actor.parameters) {
+			if (param.name == varName) {
+				if (firstInitializer) {
+					writer << "\n\t  : ";
+					firstInitializer = false;
+				} else {
+					writer << ",\n\t    ";
+				}
+				writer << varName << "(" << varName << ")";
+			}
+		}
+	}
+
+	writer << " {\n";
+
+	// TODO: Probe hook if generateProbes is true
+	if (generateProbes) {
+		writer << "\t\t// TODO: ProbeCreate(\"" << actor.name << "\");\n";
+	}
+
+	writer << "\t}\n";
+}
+
+void ActorCompiler::writeStateDestructor(std::ostream& writer) {
+	writer << "\t~" << stateClassName << "() {\n";
+
+	// TODO: Probe hook if generateProbes is true
+	if (generateProbes) {
+		writer << "\t\t// TODO: ProbeDestroy(\"" << actor.name << "\");\n";
+	}
+
+	writer << "\t}\n";
+}
+
+void ActorCompiler::writeFunctions(std::ostream& writer) {
+	for (const auto& pair : functions) {
+		Function* func = pair.second;
+		if (func->getBodyText().length() > 0) {
+			writeFunction(writer, func);
+		}
+
+		// TODO: Handle function overloads if present
+	}
+}
+
+void ActorCompiler::writeFunction(std::ostream& writer, Function* func) {
+	// Function signature
+	std::string returnTypeStr = func->returnType.empty() ? "" : func->returnType + " ";
+	writer << "\t" << returnTypeStr << func->name << "(";
+
+	// TODO: Format formal parameters properly
+	writer << "int loopDepth";
+
+	writer << ")";
+
+	// TODO: Add function specifiers (const, override, etc.)
+
+	writer << " {\n";
+
+	// Function body
+	std::string bodyText = func->getBodyText();
+	if (!bodyText.empty()) {
+		// Add indentation to each line
+		size_t pos = 0;
+		while (pos < bodyText.length()) {
+			size_t endPos = bodyText.find('\n', pos);
+			if (endPos == std::string::npos) {
+				endPos = bodyText.length();
+			}
+
+			std::string line = bodyText.substr(pos, endPos - pos);
+			if (!line.empty()) {
+				writer << "\t" << line << "\n";
+			} else {
+				writer << "\n";
+			}
+
+			pos = endPos + 1;
+		}
+	}
+
+	// Return statement if not unreachable
+	if (!func->endIsUnreachable) {
+		writer << "\t\treturn loopDepth;\n";
+	}
+
+	writer << "\t}\n";
+}
+
+// ========== Code Generation Helper Methods ==========
+
+void ActorCompiler::writeTemplate(std::ostream& writer) {
+	// Delegate to static helper in actorcompiler namespace
+	actorcompiler::writeTemplate(writer, actor.templateFormals, actor.sourceLine, lineNumbersEnabled, sourceFile);
+}
+
+void ActorCompiler::lineNumber(std::ostream& writer, int line) {
+	if (lineNumbersEnabled && line >= 0) {
+		writer << "#line " << line << " \"" << sourceFile << "\"\n";
+	}
+}
+
+std::vector<std::string> ActorCompiler::parameterList() const {
+	std::vector<std::string> params;
+	for (const auto& p : actor.parameters) {
+		std::string param = p.type + " const& " + p.name;
+		if (!p.initializer.empty()) {
+			param += " = " + p.initializer;
+		}
+		params.push_back(param);
+	}
+	return params;
+}
+
+std::string ActorCompiler::getTemplateActuals() const {
+	if (actor.templateFormals.empty()) {
+		return "";
+	}
+
+	std::string result = "<";
+	for (size_t i = 0; i < actor.templateFormals.size(); ++i) {
+		if (i > 0) {
+			result += ", ";
+		}
+		result += actor.templateFormals[i].name;
+	}
+	result += ">";
+	return result;
+}
+
+std::pair<uint64_t, uint64_t> ActorCompiler::getUidFromString(const std::string& str) {
+	// Use OpenSSL SHA256 to generate deterministic UID
+	unsigned char hash[SHA256_DIGEST_LENGTH];
+	SHA256(reinterpret_cast<const unsigned char*>(str.data()), str.size(), hash);
+
+	// Convert first 16 bytes to two uint64_t values
+	uint64_t uid1 = 0, uid2 = 0;
+	for (int i = 0; i < 8; ++i) {
+		uid1 = (uid1 << 8) | hash[i];
+		uid2 = (uid2 << 8) | hash[i + 8];
+	}
+
+	return { uid1, uid2 };
+}
+
+// ========== Error Handling ==========
 
 void ErrorMessagePolicy::handleActorWithoutWait(const std::string& sourceFile, const Actor& actor) {
 	if (!disableDiagnostics && !actor.isTestCase) {

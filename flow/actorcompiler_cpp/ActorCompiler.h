@@ -120,9 +120,20 @@ private:
 	void compileStatement(Function* func, TryStatement* stmt, const Context& ctx);
 	void compileStatement(Function* func, ThrowStatement* stmt, const Context& ctx);
 
-	// Code generation methods (to be implemented in Step 5)
+	// Code generation helper methods
+	void writeTemplate(std::ostream& writer);
+	void lineNumber(std::ostream& writer, int line);
+	std::vector<std::string> parameterList() const;
+	std::string getTemplateActuals() const;
+	std::pair<uint64_t, uint64_t> getUidFromString(const std::string& str);
+
+	// Code generation main methods
 	void writeActorFunction(std::ostream& writer, const std::string& fullReturnType);
-	void writeActorClass(std::ostream& writer, const std::string& fullStateClassName);
+	void writeActorClass(std::ostream& writer, const std::string& fullStateClassName, Function* body);
+	void writeStateConstructor(std::ostream& writer);
+	void writeStateDestructor(std::ostream& writer);
+	void writeFunctions(std::ostream& writer);
+	void writeFunction(std::ostream& writer, Function* func);
 };
 
 } // namespace actorcompiler
