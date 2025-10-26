@@ -60,7 +60,12 @@ public:
 	// Function call generation
 	std::string call(const std::vector<std::string>& parameters);
 
+	// Wait tracking for nested method naming
+	int getNextWaitIndex() { return ++waitCount; }
+	int getWaitCount() const { return waitCount; }
+
 private:
+	int waitCount = 0;  // Number of waits encountered in this function
 	std::ostringstream body;
 	std::string indentation;
 	bool called = false;

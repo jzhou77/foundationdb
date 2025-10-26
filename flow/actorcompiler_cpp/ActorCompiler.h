@@ -162,6 +162,7 @@ private:
 	void writeStateDestructor(std::ostream& writer);
 	void writeFunctions(std::ostream& writer);
 	void writeFunction(std::ostream& writer, Function* func);
+	void writeStateCallbackMethods(std::ostream& writer, const CallbackInfo& cb);
 };
 
 } // namespace actorcompiler

@@ -209,6 +209,7 @@ void ActorCompiler::write(std::ostream& writer) {
 	catchFunc->writeLine("this->~" + stateClassName + "();");
 	catchFunc->writeLine("static_cast<" + className + "*>(this)->sendErrorAndDelPromiseRef(error);");
 	catchFunc->writeLine("loopDepth = 0;");
+	catchFunc->writeLine("");  // Blank line before return
 	catchFunc->writeLine("return loopDepth;");
 
 	// Begin namespace if top-level and no explicit namespace
@@ -455,7 +456,8 @@ void ActorCompiler::compileStatement(Function* func, CodeBlock* stmt, const Cont
 void ActorCompiler::compileStatement(Function* func, WaitStatement* stmt, const Context& ctx) {
 	// Generate continuation method names and callback index
 	int cbIndex = nextCallbackIndex();
-	std::string whenMethodName = "a_body1when" + std::to_string(cbIndex + 1);
+	int localWaitIndex = func->getNextWaitIndex();  // Track waits per function for nested naming
+	std::string whenMethodName = func->name + "when" + std::to_string(localWaitIndex);
 	std::string contMethodName = "a_body1cont" + std::to_string(cbIndex + 1);
 
 	// If this is a state variable result, ensure it's in stateVariables
@@ -948,9 +950,9 @@ void ActorCompiler::writeActorClass(std::ostream& writer, const std::string& ful
 	}
 	writer << "#pragma clang diagnostic pop\n";
 
-	// Friend declarations for callback base classes (not strictly necessary, but keeps options open)
+	// Friend declarations for callback base classes
 	for (const auto& cb : callbacks) {
-		(void)cb; // suppress unused warning if empty
+		writer << "friend struct ActorCallback< " << className << ", " << cb.index << ", " << cb.type << " >;\n";
 	}
 
 	lineNumber(writer, actor.sourceLine);
@@ -1008,82 +1010,6 @@ void ActorCompiler::writeActorClass(std::ostream& writer, const std::string& ful
 	}
 	writer << "\t}\n";
 
-	// Emit callback handlers for each registered callback index
-	for (const auto& cb : callbacks) {
-		std::string exitMethodName = "a_exitChoose" + std::to_string(cb.index + 1);
-		std::string whenMethodName = cb.continueLabel;  // This is the when method name
-		std::string catchMethodName = cb.errorHandler;
-
-		// a_callback_fire - const& overload
-		writer << "\tvoid a_callback_fire(ActorCallback< " << className << ", " << cb.index << ", " << cb.type
-		       << " >*, " << cb.type << " const& value) {\n";
-		writer << "\t\t#ifdef WITH_ACAC\n";
-		auto callbackFireKey = sourceFile + ":" + actor.name + ":callback_fire:" + std::to_string(cb.index);
-		auto callbackFireId = getUidFromString(callbackFireKey);
-		uidObjects[callbackFireId] = callbackFireKey;
-		writer << "\t\tstatic constexpr ActorBlockIdentifier __identifier = UID(" << callbackFireId.first
-		       << "UL, " << callbackFireId.second << "UL);\n";
-		writer << "\t\tActorExecutionContextHelper __helper(static_cast<" << className
-		       << "*>(this)->activeActorHelper.actorID, __identifier);\n";
-		writer << "\t\t#endif // WITH_ACAC\n";
-		writer << "\t\t" << exitMethodName << "();\n";
-		writer << "\t\ttry {\n";
-		writer << "\t\t\t" << whenMethodName << "(value, 0);\n";
-		writer << "\t\t}\n";
-		writer << "\t\tcatch (Error& error) {\n";
-		writer << "\t\t\t" << catchMethodName << "(error, 0);\n";
-		writer << "\t\t} catch (...) {\n";
-		writer << "\t\t\t" << catchMethodName << "(unknown_error(), 0);\n";
-		writer << "\t\t}\n";
-		writer << "\n";
-		writer << "\t}\n";
-
-		// a_callback_fire - && overload
-		writer << "\tvoid a_callback_fire(ActorCallback< " << className << ", " << cb.index << ", " << cb.type
-		       << " >*, " << cb.type << " && value) {\n";
-		writer << "\t\t#ifdef WITH_ACAC\n";
-		writer << "\t\tstatic constexpr ActorBlockIdentifier __identifier = UID(" << callbackFireId.first
-		       << "UL, " << callbackFireId.second << "UL);\n";
-		writer << "\t\tActorExecutionContextHelper __helper(static_cast<" << className
-		       << "*>(this)->activeActorHelper.actorID, __identifier);\n";
-		writer << "\t\t#endif // WITH_ACAC\n";
-		writer << "\t\t" << exitMethodName << "();\n";
-		writer << "\t\ttry {\n";
-		writer << "\t\t\t" << whenMethodName << "(std::move(value), 0);\n";
-		writer << "\t\t}\n";
-		writer << "\t\tcatch (Error& error) {\n";
-		writer << "\t\t\t" << catchMethodName << "(error, 0);\n";
-		writer << "\t\t} catch (...) {\n";
-		writer << "\t\t\t" << catchMethodName << "(unknown_error(), 0);\n";
-		writer << "\t\t}\n";
-		writer << "\n";
-		writer << "\t}\n";
-
-		// a_callback_error
-		writer << "\tvoid a_callback_error(ActorCallback< " << className << ", " << cb.index << ", " << cb.type
-		       << " >*, Error err) {\n";
-		writer << "\t\t#ifdef WITH_ACAC\n";
-		auto callbackErrorKey = sourceFile + ":" + actor.name + ":callback_error:" + std::to_string(cb.index);
-		auto callbackErrorId = getUidFromString(callbackErrorKey);
-		uidObjects[callbackErrorId] = callbackErrorKey;
-		writer << "\t\tstatic constexpr ActorBlockIdentifier __identifier = UID(" << callbackErrorId.first
-		       << "UL, " << callbackErrorId.second << "UL);\n";
-		writer << "\t\tActorExecutionContextHelper __helper(static_cast<" << className
-		       << "*>(this)->activeActorHelper.actorID, __identifier);\n";
-		writer << "\t\t#endif // WITH_ACAC\n";
-		writer << "\t\t" << exitMethodName << "();\n";
-		writer << "\t\ttry {\n";
-		writer << "\t\t\t" << catchMethodName << "(err, 0);\n";
-		writer << "\t\t}\n";
-		writer << "\t\tcatch (Error& error) {\n";
-		writer << "\t\t\t" << catchMethodName << "(error, 0);\n";
-		writer << "\t\t} catch (...) {\n";
-		writer << "\t\t\t" << catchMethodName << "(unknown_error(), 0);\n";
-		writer << "\t\t}\n";
-		writer << "\n";
-		writer << "\t}\n";
-	}
-
 	writer << "};\n";
 }
 
@@ -1138,6 +1064,11 @@ void ActorCompiler::writeFunctions(std::ostream& writer) {
 
 		// TODO: Handle function overloads if present
 	}
+
+	// Generate callback methods in state class
+	for (const auto& cb : callbacks) {
+		writeStateCallbackMethods(writer, cb);
+	}
 }
 
 void ActorCompiler::writeFunction(std::ostream& writer, Function* func) {
@@ -1147,7 +1078,7 @@ void ActorCompiler::writeFunction(std::ostream& writer, Function* func) {
 
 	// Formal parameters
 	if (!func->formalParameters.empty()) {
-		writer << join(func->formalParameters, ", ");
+		writer << join(func->formalParameters, ",");
 	} else if (func->returnType != "void") {
 		// Only add default loopDepth for non-void functions (body/cont methods)
 		writer << "int loopDepth";
@@ -1217,6 +1148,84 @@ void ActorCompiler::writeFunction(std::ostream& writer, Function* func) {
 		writer << "\t\treturn loopDepth;\n";
 	}
 
+	writer << "\t}\n";
+}
+
+void ActorCompiler::writeStateCallbackMethods(std::ostream& writer, const CallbackInfo& cb) {
+	std::string exitMethodName = "a_exitChoose" + std::to_string(cb.index + 1);
+	std::string whenMethodName = cb.continueLabel;  // This is the when method name
+	std::string catchMethodName = cb.errorHandler;
+
+	// a_callback_fire - const& overload
+	writer << "\tvoid a_callback_fire(ActorCallback< " << className << ", " << cb.index << ", " << cb.type
+	       << " >*," << cb.type << " const& value) \n";
+	writer << "\t{\n";
+	writer << "\t\t#ifdef WITH_ACAC\n";
+	auto callbackFireKey = sourceFile + ":" + actor.name + ":callback_fire:" + std::to_string(cb.index);
+	auto callbackFireId = getUidFromString(callbackFireKey);
+	uidObjects[callbackFireId] = callbackFireKey;
+	writer << "\t\tstatic constexpr ActorBlockIdentifier __identifier = UID(" << callbackFireId.first
+	       << "UL, " << callbackFireId.second << "UL);\n";
+	writer << "\t\tActorExecutionContextHelper __helper(static_cast<" << className
+	       << "*>(this)->activeActorHelper.actorID, __identifier);\n";
+	writer << "\t\t#endif // WITH_ACAC\n";
+	writer << "\t\t" << exitMethodName << "();\n";
+	writer << "\t\ttry {\n";
+	writer << "\t\t\t" << whenMethodName << "(value, 0);\n";
+	writer << "\t\t}\n";
+	writer << "\t\tcatch (Error& error) {\n";
+	writer << "\t\t\t" << catchMethodName << "(error, 0);\n";
+	writer << "\t\t} catch (...) {\n";
+	writer << "\t\t\t" << catchMethodName << "(unknown_error(), 0);\n";
+	writer << "\t\t}\n";
+	writer << "\n";
+	writer << "\t}\n";
+
+	// a_callback_fire - && overload
+	writer << "\tvoid a_callback_fire(ActorCallback< " << className << ", " << cb.index << ", " << cb.type
+	       << " >*," << cb.type << " && value) \n";
+	writer << "\t{\n";
+	writer << "\t\t#ifdef WITH_ACAC\n";
+	writer << "\t\tstatic constexpr ActorBlockIdentifier __identifier = UID(" << callbackFireId.first
+	       << "UL, " << callbackFireId.second << "UL);\n";
+	writer << "\t\tActorExecutionContextHelper __helper(static_cast<" << className
+	       << "*>(this)->activeActorHelper.actorID, __identifier);\n";
+	writer << "\t\t#endif // WITH_ACAC\n";
+	writer << "\t\t" << exitMethodName << "();\n";
+	writer << "\t\ttry {\n";
+	writer << "\t\t\t" << whenMethodName << "(std::move(value), 0);\n";
+	writer << "\t\t}\n";
+	writer << "\t\tcatch (Error& error) {\n";
+	writer << "\t\t\t" << catchMethodName << "(error, 0);\n";
+	writer << "\t\t} catch (...) {\n";
+	writer << "\t\t\t" << catchMethodName << "(unknown_error(), 0);\n";
+	writer << "\t\t}\n";
+	writer << "\n";
+	writer << "\t}\n";
+
+	// a_callback_error
+	writer << "\tvoid a_callback_error(ActorCallback< " << className << ", " << cb.index << ", " << cb.type
+	       << " >*,Error err) \n";
+	writer << "\t{\n";
+	writer << "\t\t#ifdef WITH_ACAC\n";
+	auto callbackErrorKey = sourceFile + ":" + actor.name + ":callback_error:" + std::to_string(cb.index);
+	auto callbackErrorId = getUidFromString(callbackErrorKey);
+	uidObjects[callbackErrorId] = callbackErrorKey;
+	writer << "\t\tstatic constexpr ActorBlockIdentifier __identifier = UID(" << callbackErrorId.first
+	       << "UL, " << callbackErrorId.second << "UL);\n";
+	writer << "\t\tActorExecutionContextHelper __helper(static_cast<" << className
+	       << "*>(this)->activeActorHelper.actorID, __identifier);\n";
+	writer << "\t\t#endif // WITH_ACAC\n";
+	writer << "\t\t" << exitMethodName << "();\n";
+	writer << "\t\ttry {\n";
+	writer << "\t\t\t" << catchMethodName << "(err, 0);\n";
+	writer << "\t\t}\n";
+	writer << "\t\tcatch (Error& error) {\n";
+	writer << "\t\t\t" << catchMethodName << "(error, 0);\n";
+	writer << "\t\t} catch (...) {\n";
+	writer << "\t\t\t" << catchMethodName << "(unknown_error(), 0);\n";
+	writer << "\t\t}\n";
+	writer << "\n";
 	writer << "\t}\n";
 }
 
