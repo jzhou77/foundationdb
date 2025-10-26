@@ -1164,11 +1164,13 @@ void ActorCompiler::writeFunction(std::ostream& writer, Function* func) {
 	writer << " \n\t{\n";
 
 	// Determine if this function needs try-catch wrapper
-	// Apply to a_body and a_cont methods, but NOT to a_when methods (they're called from within try-catch)
-	bool needsTryCatch = ((func->name.find("a_body") == 0 || func->name.find("a_cont") == 0 || func->name.find("a_Body") == 0 || func->name.find("a_Cont") == 0) &&
-	                      func->name.find("Catch") == std::string::npos &&
-	                      func->name.find("when") == std::string::npos &&
-	                      func->name.find("When") == std::string::npos);
+	// Only a_body methods (not a_cont, not a_when, not a_Catch) should have try-catch
+	bool needsTryCatch = (func->name.find("a_body") == 0 || func->name.find("a_Body") == 0) &&
+	                     func->name.find("Catch") == std::string::npos &&
+	                     func->name.find("cont") == std::string::npos &&
+	                     func->name.find("Cont") == std::string::npos &&
+	                     func->name.find("when") == std::string::npos &&
+	                     func->name.find("When") == std::string::npos;
 
 	// Add try block if needed
 	if (needsTryCatch) {
