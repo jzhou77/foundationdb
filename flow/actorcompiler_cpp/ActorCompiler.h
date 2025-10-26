@@ -73,6 +73,8 @@ private:
 		std::string continueLabel; // Continuation function label to invoke on resume
 		std::string resultName; // Variable name assigned from wait()
 		bool resultIsState{ false }; // Whether resultName is a state member
+		std::string errorHandler; // Error handler label (from Context::catchHandler)
+		std::string errorVarName; // Error variable name (from Context::errorVarName)
 	};
 	std::vector<CallbackInfo> callbacks; // Collected callbacks for this actor
 	int callbackCounter = 0; // Monotonic counter for callback indices

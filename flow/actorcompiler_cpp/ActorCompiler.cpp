@@ -432,6 +432,8 @@ void ActorCompiler::compileStatement(Function* func, WaitStatement* stmt, const 
 	cb.continueLabel = contLabel;
 	cb.resultName = stmt->result.name;
 	cb.resultIsState = stmt->resultIsState;
+	cb.errorHandler = ctx.catchHandler;
+	cb.errorVarName = ctx.errorVarName;
 	callbacks.push_back(cb);
 
 	// Use a unique future variable per wait to avoid name collisions
@@ -502,6 +504,14 @@ void ActorCompiler::compileStatement(Function* func, WaitStatement* stmt, const 
 		func->writeLine("static_cast<" + actorBase + "*>(this)->actor_wait_state = 0;");
 		// Clear outstanding wait pointer since callback has fired
 		func->writeLine("__outstanding_wait_" + std::to_string(cbIndex) + " = nullptr;");
+		// Check if callback set an error (error callback stores error in errorVarName)
+		if (!ctx.catchHandler.empty() && !ctx.errorVarName.empty()) {
+			func->writeLine("if (" + ctx.errorVarName + ".code() != invalid_error_code) {");
+			func->indent(+1);
+			func->writeLine("goto " + ctx.catchHandler + ";");
+			func->indent(-1);
+			func->writeLine("}");
+		}
 	}
 	func->writeLine(contLabel + ":");
 	// The continuation function will be filled in by subsequent compileStatement calls
@@ -950,23 +960,45 @@ void ActorCompiler::writeActorClass(std::ostream& writer, const std::string& ful
 
 	// Emit callback handlers for each registered callback index
 	for (const auto& cb : callbacks) {
-		// a_callback_fire
+		// a_callback_fire - callback fires when wait completes successfully
 		writer << "\tvoid a_callback_fire(ActorCallback< " << className << ", " << cb.index << ", " << cb.type
 		       << " >*, " << cb.type << " const& value) {\n";
-		writer << "\t\t// TODO: resume at continuation '" << cb.continueLabel << "'\n";
+		writer << "\t\tfreeAfter(static_cast<Actor<" << (actor.returnType.empty() ? "void" : actor.returnType)
+		       << ">*>(this));\n";
+		writer << "\t\tint oldstate = static_cast<Actor<" << (actor.returnType.empty() ? "void" : actor.returnType)
+		       << ">*>(this)->actor_wait_state;\n";
+		writer << "\t\tstatic_cast<Actor<" << (actor.returnType.empty() ? "void" : actor.returnType)
+		       << ">*>(this)->actor_wait_state = 0;\n";
 		if (cb.resultIsState && !cb.resultName.empty()) {
 			writer << "\t\tthis->" << cb.resultName << " = value;\n";
 		} else {
 			writer << "\t\t// NOTE: non-state wait result variable '" << cb.resultName
 			       << "' not yet supported in callback\n";
 		}
+		writer << "\t\tthis->body(0);\n";
 		writer << "\t}\n";
 
-		// a_callback_error
+		// a_callback_error - callback fires when wait completes with error
 		writer << "\tvoid a_callback_error(ActorCallback< " << className << ", " << cb.index << ", " << cb.type
 		       << " >*, Error err) {\n";
-		writer << "\t\t// TODO: route error to catch handler from callback: '" << cb.continueLabel << "'\n";
-		writer << "\t\t( void ) err;\n";
+		writer << "\t\tfreeAfter(static_cast<Actor<" << (actor.returnType.empty() ? "void" : actor.returnType)
+		       << ">*>(this));\n";
+		writer << "\t\tint oldstate = static_cast<Actor<" << (actor.returnType.empty() ? "void" : actor.returnType)
+		       << ">*>(this)->actor_wait_state;\n";
+		writer << "\t\tstatic_cast<Actor<" << (actor.returnType.empty() ? "void" : actor.returnType)
+		       << ">*>(this)->actor_wait_state = 0;\n";
+
+		// If we have an error handler, invoke it; otherwise throw
+		if (!cb.errorHandler.empty()) {
+			// Store error in the error variable and goto the handler
+			writer << "\t\tthis->" << cb.errorVarName << " = err;\n";
+			writer << "\t\tthis->body(0); // Will goto error handler at next resume point\n";
+		} else {
+			// No error handler, throw the error
+			writer << "\t\tdelete static_cast<Actor<" << (actor.returnType.empty() ? "void" : actor.returnType)
+			       << ">*>(this);\n";
+			writer << "\t\tthrow err;\n";
+		}
 		writer << "\t}\n";
 	}
 
