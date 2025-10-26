@@ -183,3 +183,18 @@ target_include_directories(actorcompiler_cpp_codegen_smoke PRIVATE ${CMAKE_CURRE
 target_compile_features(actorcompiler_cpp_codegen_smoke PRIVATE cxx_std_17)
 target_link_libraries(actorcompiler_cpp_codegen_smoke PRIVATE OpenSSL::Crypto)
 add_test(NAME ActorCompilerCodegenSmoke COMMAND actorcompiler_cpp_codegen_smoke)
+
+add_executable(actorcompiler_cpp_error_handling
+  tests/error_handling_test.cpp
+  Tokenizer.cpp
+  Token.cpp
+  ParseTree.cpp
+  ActorParser.cpp
+  ActorCompiler.cpp
+  Function.cpp
+  Context.cpp
+)
+target_include_directories(actorcompiler_cpp_error_handling PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(actorcompiler_cpp_error_handling PRIVATE cxx_std_17)
+target_link_libraries(actorcompiler_cpp_error_handling PRIVATE OpenSSL::Crypto)
+add_test(NAME ActorCompilerErrorHandling COMMAND actorcompiler_cpp_error_handling)
