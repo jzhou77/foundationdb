@@ -427,7 +427,8 @@ void ActorCompiler::compileStatement(Function* func, WaitStatement* stmt, const 
 	callbacks.push_back(cb);
 
 	// Use a unique future variable per wait to avoid name collisions
-	std::string futureVar = "__when_expr_" + std::to_string(cbIndex);
+	std::string futureVar =
+	    (cbIndex == 0) ? std::string("__when_expr") : std::string("__when_expr_") + std::to_string(cbIndex);
 
 	// Emit the wait expression assignment to a StrictFuture
 	func->writeLine("StrictFuture<" + stmt->result.type + "> " + futureVar + " = " + stmt->futureExpression + ";");
@@ -468,16 +469,28 @@ void ActorCompiler::compileStatement(Function* func, WaitStatement* stmt, const 
 
 	func->writeLine("} else {");
 	func->indent(+1);
-	// Future not ready - set up async callback (registration emitted after Task 2 once class name is finalized)
-	func->writeLine("// TODO: Register callback for index " + std::to_string(cbIndex) + ":");
-	func->writeLine("// " + futureVar + ".addCallbackAndClear(static_cast<ActorCallback<...>*>(this));");
-	func->writeLine("// this->actor_wait_state = " + std::to_string(cbIndex + 1) + ";");
-	func->writeLine("return; // Suspend until callback fires");
+	// Future not ready - set up async callback and suspend
+	{
+		std::string actorBase =
+		    actor.returnType.empty() ? std::string("Actor<void>") : (std::string("Actor<") + actor.returnType + ">");
+		func->writeLine("static_cast<" + actorBase + "*>(this)->actor_wait_state = " + std::to_string(cbIndex + 1) +
+		                ";");
+		func->writeLine(futureVar + ".addCallbackAndClear(static_cast<ActorCallback< " + className + ", " +
+		                std::to_string(cbIndex) + ", " + stmt->result.type + " >*>(this));");
+		func->writeLine("return 0; // Suspend until callback fires");
+	}
 	func->indent(-1);
 	func->writeLine("}");
 
 	// Emit continuation label
 	func->writeLine("");
+	// Resume point for this wait
+	func->writeLine("resume_" + std::to_string(cbIndex + 1) + ":");
+	{
+		std::string actorBase =
+		    actor.returnType.empty() ? std::string("Actor<void>") : (std::string("Actor<") + actor.returnType + ">");
+		func->writeLine("static_cast<" + actorBase + "*>(this)->actor_wait_state = 0;");
+	}
 	func->writeLine(contLabel + ":");
 	// The continuation function will be filled in by subsequent compileStatement calls
 }
@@ -1012,6 +1025,19 @@ void ActorCompiler::writeFunction(std::ostream& writer, Function* func) {
 	}
 
 	writer << " {\n";
+
+	// Resume switch: if resuming from a wait, jump to the appropriate resume label
+	if (func->name == "body" && !callbacks.empty()) {
+		std::string actorBase =
+		    actor.returnType.empty() ? std::string("Actor<void>") : (std::string("Actor<") + actor.returnType + ">");
+		writer << "\t\tif (static_cast<" << actorBase << "*>(this)->actor_wait_state > 0) {\n";
+		writer << "\t\t\tswitch (static_cast<" << actorBase << "*>(this)->actor_wait_state) {\n";
+		for (size_t i = 0; i < callbacks.size(); ++i) {
+			writer << "\t\t\t\tcase " << (i + 1) << ": goto resume_" << (i + 1) << ";\n";
+		}
+		writer << "\t\t\t}\n";
+		writer << "\t\t}\n\n";
+	}
 
 	// Function body
 	std::string bodyText = func->getBodyText();
