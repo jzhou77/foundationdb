@@ -30,6 +30,7 @@
 #include <map>
 #include <cstdint>
 #include <ostream>
+#include <vector>
 
 namespace actorcompiler {
 
@@ -64,6 +65,17 @@ private:
 	std::map<std::pair<uint64_t, uint64_t>, std::string> uidObjects;
 	std::map<std::string, Function*> functions; // label -> Function mapping
 	int labelIndex; // Counter for generating unique continuation labels
+
+	// Callback generation infrastructure
+	struct CallbackInfo {
+		std::string type; // T from Future<T>
+		int index; // Callback index (0, 1, 2, ...)
+		std::string continueLabel; // Continuation function label to invoke on resume
+		std::string resultName; // Variable name assigned from wait()
+		bool resultIsState{ false }; // Whether resultName is a state member
+	};
+	std::vector<CallbackInfo> callbacks; // Collected callbacks for this actor
+	int callbackCounter = 0; // Monotonic counter for callback indices
 
 public:
 	ActorCompiler(const Actor& actor,
@@ -100,6 +112,9 @@ private:
 
 	// Generate a unique continuation label
 	std::string generateLabel();
+
+	// Generate next callback index
+	int nextCallbackIndex() { return callbackCounter++; }
 
 	// Statement compilation - main dispatcher
 	void compile(Function* func, Statement* stmt, const Context& ctx);

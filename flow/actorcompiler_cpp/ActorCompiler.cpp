@@ -412,27 +412,40 @@ void ActorCompiler::compileStatement(Function* func, CodeBlock* stmt, const Cont
 }
 
 void ActorCompiler::compileStatement(Function* func, WaitStatement* stmt, const Context& ctx) {
-	// Generate a continuation label for code after the wait
+	// Generate a continuation label for code after the wait and a unique callback index
 	std::string contLabel = generateLabel();
 	Function* contFunc = getFunction(contLabel);
+	int cbIndex = nextCallbackIndex();
+
+	// Track callback for later class generation
+	CallbackInfo cb;
+	cb.type = stmt->result.type;
+	cb.index = cbIndex;
+	cb.continueLabel = contLabel;
+	cb.resultName = stmt->result.name;
+	cb.resultIsState = stmt->resultIsState;
+	callbacks.push_back(cb);
+
+	// Use a unique future variable per wait to avoid name collisions
+	std::string futureVar = "__when_expr_" + std::to_string(cbIndex);
 
 	// Emit the wait expression assignment to a StrictFuture
-	func->writeLine("StrictFuture<" + stmt->result.type + "> __when_expr = " + stmt->futureExpression + ";");
+	func->writeLine("StrictFuture<" + stmt->result.type + "> " + futureVar + " = " + stmt->futureExpression + ";");
 
 	// Check if the future is already ready (fast path optimization)
-	func->writeLine("if (__when_expr.isReady()) {");
+	func->writeLine("if (" + futureVar + ".isReady()) {");
 	func->indent(+1);
 
 	// Check for error in ready future
-	func->writeLine("if (__when_expr.isError()) {");
+	func->writeLine("if (" + futureVar + ".isError()) {");
 	func->indent(+1);
 	if (!ctx.catchHandler.empty()) {
 		// Jump to error handler if one is set
-		func->writeLine(ctx.errorVarName + " = __when_expr.getError();");
+		func->writeLine(ctx.errorVarName + " = " + futureVar + ".getError();");
 		func->writeLine("goto " + ctx.catchHandler + ";");
 	} else {
 		// Re-throw if no handler
-		func->writeLine("throw __when_expr.getError();");
+		func->writeLine("throw " + futureVar + ".getError();");
 	}
 	func->indent(-1);
 	func->writeLine("} else {");
@@ -441,12 +454,12 @@ void ActorCompiler::compileStatement(Function* func, WaitStatement* stmt, const 
 	// Extract value from ready future
 	if (stmt->resultIsState) {
 		// State variable - assign directly to member
-		func->writeLine(stmt->result.name + " = __when_expr.get();");
+		func->writeLine(stmt->result.name + " = " + futureVar + ".get();");
 		func->writeLine("goto " + contLabel + ";");
 	} else {
 		// Local variable - pass as parameter to continuation (not yet supported)
 		func->writeLine("// TODO: Non-state wait result not fully implemented");
-		func->writeLine(stmt->result.type + " " + stmt->result.name + " = __when_expr.get();");
+		func->writeLine(stmt->result.type + " " + stmt->result.name + " = " + futureVar + ".get();");
 		func->writeLine("goto " + contLabel + ";");
 	}
 	func->indent(-1);
@@ -455,10 +468,10 @@ void ActorCompiler::compileStatement(Function* func, WaitStatement* stmt, const 
 
 	func->writeLine("} else {");
 	func->indent(+1);
-	// Future not ready - need to set up async callback (simplified for now)
-	func->writeLine("// TODO: Set up ActorCallback and register with future");
-	func->writeLine("// __when_expr.addCallbackAndClear(static_cast<ActorCallback<...>*>(this));");
-	func->writeLine("// actor_wait_state = ...;");
+	// Future not ready - set up async callback (registration emitted after Task 2 once class name is finalized)
+	func->writeLine("// TODO: Register callback for index " + std::to_string(cbIndex) + ":");
+	func->writeLine("// " + futureVar + ".addCallbackAndClear(static_cast<ActorCallback<...>*>(this));");
+	func->writeLine("// this->actor_wait_state = " + std::to_string(cbIndex + 1) + ";");
 	func->writeLine("return; // Suspend until callback fires");
 	func->indent(-1);
 	func->writeLine("}");
@@ -823,8 +836,15 @@ void ActorCompiler::writeActorClass(std::ostream& writer, const std::string& ful
 	writeTemplate(writer);
 	lineNumber(writer, actor.sourceLine);
 
-	// TODO: Generate callback base classes from callbacks vector
-	std::string callbackBases = ""; // Will be implemented when we add callback support
+	// Generate callback base classes from callbacks vector
+	std::string callbackBases;
+	if (!callbacks.empty()) {
+		for (size_t i = 0; i < callbacks.size(); ++i) {
+			const auto& cb = callbacks[i];
+			callbackBases += std::string("public ActorCallback< ") + className + ", " + std::to_string(cb.index) +
+			                 ", " + cb.type + " >, ";
+		}
+	}
 
 	// Class declaration with inheritance
 	std::string returnType = actor.returnType.empty() ? "void" : actor.returnType;
@@ -861,7 +881,10 @@ void ActorCompiler::writeActorClass(std::ostream& writer, const std::string& ful
 	}
 	writer << "#pragma clang diagnostic pop\n";
 
-	// TODO: Friend declarations for callbacks
+	// Friend declarations for callback base classes (not strictly necessary, but keeps options open)
+	for (const auto& cb : callbacks) {
+		(void)cb; // suppress unused warning if empty
+	}
 
 	lineNumber(writer, actor.sourceLine);
 
@@ -890,6 +913,28 @@ void ActorCompiler::writeActorClass(std::ostream& writer, const std::string& ful
 	}
 	writer << "\t\t// TODO: propagate cancellation to outstanding waits and callbacks\n";
 	writer << "\t}\n";
+
+	// Emit callback handlers for each registered callback index
+	for (const auto& cb : callbacks) {
+		// a_callback_fire
+		writer << "\tvoid a_callback_fire(ActorCallback< " << className << ", " << cb.index << ", " << cb.type
+		       << " >*, " << cb.type << " const& value) {\n";
+		writer << "\t\t// TODO: resume at continuation '" << cb.continueLabel << "'\n";
+		if (cb.resultIsState && !cb.resultName.empty()) {
+			writer << "\t\tthis->" << cb.resultName << " = value;\n";
+		} else {
+			writer << "\t\t// NOTE: non-state wait result variable '" << cb.resultName
+			       << "' not yet supported in callback\n";
+		}
+		writer << "\t}\n";
+
+		// a_callback_error
+		writer << "\tvoid a_callback_error(ActorCallback< " << className << ", " << cb.index << ", " << cb.type
+		       << " >*, Error err) {\n";
+		writer << "\t\t// TODO: route error to catch handler from callback: '" << cb.continueLabel << "'\n";
+		writer << "\t\t( void ) err;\n";
+		writer << "\t}\n";
+	}
 
 	writer << "};\n";
 }

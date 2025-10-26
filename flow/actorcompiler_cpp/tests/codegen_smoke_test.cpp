@@ -400,6 +400,34 @@ ACTOR Future<int> multiState() {
 	std::cout << "✓ Test passed\n\n";
 }
 
+void testCallbackScaffold() {
+	std::cout << "Test: Callback scaffold generation for wait()\n";
+
+	std::string sourceCode = R"(
+ACTOR Future<int> withCallback(Future<int> f) {
+	state int x = wait(f);
+	return x;
+}
+)";
+
+	ErrorMessagePolicy policy;
+	ActorParser parser(sourceCode, "test.actor.cpp", policy, /*generateProbes*/ false);
+
+	std::ostringstream output;
+	parser.write(output, "out.cpp");
+
+	std::string code = output.str();
+	std::cout << "Generated code:\n" << code << "\n";
+
+	// The actor class should inherit from ActorCallback<...>
+	assert(code.find("ActorCallback<") != std::string::npos);
+	// Callback handlers should be emitted
+	assert(code.find("a_callback_fire") != std::string::npos);
+	assert(code.find("a_callback_error") != std::string::npos);
+
+	std::cout << "✓ Test passed\n\n";
+}
+
 int main() {
 	std::cout << "=== Code Generation Smoke Tests ===\n\n";
 
@@ -417,6 +445,7 @@ int main() {
 		testTemplateActor();
 		testProbesEnabledDisabled();
 		testStateVariableTypes();
+		testCallbackScaffold();
 
 		std::cout << "All tests passed!\n";
 		return 0;
