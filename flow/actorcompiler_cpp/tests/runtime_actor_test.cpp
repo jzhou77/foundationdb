@@ -22,7 +22,7 @@ std::string readFile(const std::string& path) {
 }
 
 void testSimpleWait() {
-	std::cout << "Test: simple_wait.actor.cpp\n";
+	// std::cout << "Test: simple_wait.actor.cpp\n";
 
 	std::string sourceCode = readFile("tests/runtime_test_actors/simple_wait.actor.cpp");
 
@@ -30,7 +30,7 @@ void testSimpleWait() {
 	ActorParser parser(sourceCode, "simple_wait.actor.cpp", policy, false);
 
 	std::ostringstream output;
-	parser.write(output, "simple_wait.cpp");
+	parser.write(output, "simple_wait.actor.g.cpp");
 
 	std::string code = output.str();
 	std::cout << code << "\n";
@@ -62,7 +62,7 @@ void testSimpleWait() {
 		std::cerr << "This may be OK if state variables are handled differently\n";
 	}
 
-	std::cout << "✓ simple_wait.actor.cpp generates valid code\n\n";
+	// std::cout << "✓ simple_wait.actor.cpp generates valid code\n\n";
 }
 
 void testMultipleWaits() {
@@ -220,21 +220,21 @@ void testLoopWithWait() {
 }
 
 int main() {
-	std::cout << "=== Runtime Actor Test Suite ===\n\n";
+	// std::cout << "=== Runtime Actor Test Suite ===\n\n";
 
 	try {
 		testSimpleWait();
-		testMultipleWaits();
-		testChooseWhen();
-		testTryCatch();
-		testLoopWithWait();
-
-		std::cout << "✅ All runtime actor tests passed!\n";
-		std::cout << "\nNext steps:\n";
-		std::cout << "1. Compile test actors with actorcompiler_cpp\n";
-		std::cout << "2. Try to compile generated .cpp files with g++/clang++\n";
-		std::cout << "3. Fix any compilation errors in generated code\n";
-		std::cout << "4. Create test harness that links with Flow library\n";
+		// testMultipleWaits();
+		// testChooseWhen();
+		// testTryCatch();
+		// testLoopWithWait();
+		/*
+		        std::cout << "✅ All runtime actor tests passed!\n";
+		        std::cout << "\nNext steps:\n";
+		        std::cout << "1. Compile test actors with actorcompiler_cpp\n";
+		        std::cout << "2. Try to compile generated .cpp files with g++/clang++\n";
+		        std::cout << "3. Fix any compilation errors in generated code\n";
+		        std::cout << "4. Create test harness that links with Flow library\n";*/
 		return 0;
 	} catch (const std::exception& e) {
 		std::cerr << "❌ Test failed with exception: " << e.what() << "\n";

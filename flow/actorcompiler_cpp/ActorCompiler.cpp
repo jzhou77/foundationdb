@@ -1161,7 +1161,7 @@ void ActorCompiler::writeFunction(std::ostream& writer, Function* func) {
 		writer << " " << func->specifiers;
 	}
 
-	writer << " {\n";
+	writer << " \n\t{\n";
 
 	// Determine if this function needs try-catch wrapper
 	// Apply to a_body and a_cont methods, but NOT to a_when methods (they're called from within try-catch)
@@ -1178,8 +1178,10 @@ void ActorCompiler::writeFunction(std::ostream& writer, Function* func) {
 	// Function body
 	std::string bodyText = func->getBodyText();
 	if (!bodyText.empty()) {
-		// Add indentation to each line (extra indent if in try block)
-		std::string baseIndent = needsTryCatch ? "\t\t" : "\t";
+		// Add indentation to each line
+		// Inside try block: 3 tabs total (class member + function body + try block)
+		// Regular function: 2 tabs total (class member + function body)
+		std::string baseIndent = needsTryCatch ? "\t\t\t" : "\t\t";
 		size_t pos = 0;
 		while (pos < bodyText.length()) {
 			size_t endPos = bodyText.find('\n', pos);
