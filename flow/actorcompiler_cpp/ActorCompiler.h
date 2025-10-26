@@ -79,6 +79,9 @@ private:
 	std::vector<CallbackInfo> callbacks; // Collected callbacks for this actor
 	int callbackCounter = 0; // Monotonic counter for callback indices
 
+	// Track continuation function for code flow after wait statements
+	Function* pendingContinuation = nullptr;
+
 public:
 	ActorCompiler(const Actor& actor,
 	              const std::string& sourceFile,
@@ -137,6 +140,13 @@ private:
 	void compileStatement(Function* func, ChooseStatement* stmt, const Context& ctx);
 	void compileStatement(Function* func, TryStatement* stmt, const Context& ctx);
 	void compileStatement(Function* func, ThrowStatement* stmt, const Context& ctx);
+
+	// Generate when and continuation methods for wait statements
+	void generateWhenMethod(const std::string& whenMethodName,
+	                        const std::string& contMethodName,
+	                        const std::string& type,
+	                        const std::string& resultName,
+	                        int cbIndex);
 
 	// Code generation helper methods
 	void writeTemplate(std::ostream& writer);

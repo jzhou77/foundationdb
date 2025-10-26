@@ -58,6 +58,12 @@ ActorCompiler::ActorCompiler(const Actor& actor,
 	fullClassName = className; // no templates for scaffold
 	stateClassName = className + "State";
 
+	// Add actor parameters as state variables (they need to be accessible throughout actor lifetime)
+	for (const auto& param : actor.parameters) {
+		stateVariables.insert(param.name);
+		stateVariableTypes[param.name] = param.type;
+	}
+
 	// Discover state variables in actor body
 	if (actor.body) {
 		findState(actor.body.get());
@@ -174,21 +180,36 @@ void ActorCompiler::write(std::ostream& writer) {
 	}
 
 	// Create the body function and compile the actor body
-	Function* body = getFunction("body");
+	Function* body = getFunction("a_body1");
+	body->returnType = "int";
+	body->formalParameters = {"int loopDepth=0"};
 	Context bodyContext = Context::createUnreachable();
-
-	// TODO: Add catch handler for error handling
-	// bodyContext.catchHandler = getCatchFunction(body->name);
 
 	// Compile the actor body
 	if (actor.body) {
 		compile(body, actor.body.get(), bodyContext);
 	}
 
-	// Add implicit return if needed
+	// Add implicit return if needed (for void actors with no explicit return)
 	if (actor.returnType.empty() && !body->endIsUnreachable) {
-		body->writeLine("return Void();");
+		// Use same SAV pattern as explicit return
+		body->writeLine("if (!static_cast<" + className + "*>(this)->SAV<Void>::futures) { " +
+		                "this->~" + stateClassName + "(); static_cast<" + className +
+		                "*>(this)->destroy(); return 0; }");
+		body->writeLine("this->~" + stateClassName + "();");
+		body->writeLine("static_cast<" + className + "*>(this)->finishSendAndDelPromiseRef();");
+		body->writeLine("return 0;");
 	}
+
+	// Generate catch handler for body function
+	Function* catchFunc = getFunction("a_body1Catch1");
+	catchFunc->returnType = "int";
+	catchFunc->formalParameters = {"Error error", "int loopDepth=0"};
+	catchFunc->endIsUnreachable = true; // We include return in body, don't add another
+	catchFunc->writeLine("this->~" + stateClassName + "();");
+	catchFunc->writeLine("static_cast<" + className + "*>(this)->sendErrorAndDelPromiseRef(error);");
+	catchFunc->writeLine("loopDepth = 0;");
+	catchFunc->writeLine("return loopDepth;");
 
 	// Begin namespace if top-level and no explicit namespace
 	if (isTopLevel && actor.nameSpace.empty()) {
@@ -198,6 +219,9 @@ void ActorCompiler::write(std::ostream& writer) {
 	// ===== Write State Class =====
 	writer << "// This generated class is to be used only via " << actor.name << "()\n";
 	actorcompiler::writeTemplate(writer, actor.templateFormals, actor.sourceLine, lineNumbersEnabled, sourceFile);
+	lineNumber(writer, actor.sourceLine);
+	// Add template parameter for the actor type
+	writer << "template <class " << className << ">\n";
 	lineNumber(writer, actor.sourceLine);
 	writer << "class " << stateClassName << " {\n";
 	writer << "public:\n";
@@ -379,13 +403,23 @@ void ActorCompiler::compileStatement(Function* func, StateDeclarationStatement* 
 }
 
 void ActorCompiler::compileStatement(Function* func, ReturnStatement* stmt, const Context& ctx) {
-	// Generate return statement
-	// For now, just emit the return directly - full actor return logic will be added later
-	if (stmt->expression.empty()) {
-		func->writeLine("return Void();");
-	} else {
-		func->writeLine("return " + stmt->expression + ";");
-	}
+	// Generate return statement using SAV (Send And Value) pattern
+	std::string returnType = actor.returnType.empty() ? "Void" : actor.returnType;
+	std::string expression = stmt->expression.empty() ? "Void()" : stmt->expression;
+
+	// Check if anyone is waiting for the result
+	func->writeLine("if (!static_cast<" + className + "*>(this)->SAV<" + returnType + ">::futures) { (" +
+	                "void)(" + expression + "); this->~" + stateClassName + "(); static_cast<" + className +
+	                "*>(this)->destroy(); return 0; }");
+
+	// Place return value in SAV using placement new
+	func->writeLine("new (&static_cast<" + className + "*>(this)->SAV< " + returnType + " >::value()) " +
+	                returnType + "(std::move(" + expression + ")); // state_var_RVO");
+
+	// Cleanup and finish promise
+	func->writeLine("this->~" + stateClassName + "();");
+	func->writeLine("static_cast<" + className + "*>(this)->finishSendAndDelPromiseRef();");
+	func->writeLine("return 0;");
 }
 
 void ActorCompiler::compileStatement(Function* func, BreakStatement* stmt, const Context& ctx) {
@@ -406,103 +440,67 @@ void ActorCompiler::compileStatement(Function* func, ContinueStatement* stmt, co
 
 void ActorCompiler::compileStatement(Function* func, CodeBlock* stmt, const Context& ctx) {
 	// Compile each statement in the block sequentially
+	// After a wait statement, switch to continuation function
+	Function* currentFunc = func;
 	for (auto& s : stmt->statements) {
-		compile(func, s.get(), ctx);
+		compile(currentFunc, s.get(), ctx);
+		// Check if we should switch to a continuation function
+		if (pendingContinuation) {
+			currentFunc = pendingContinuation;
+			pendingContinuation = nullptr;
+		}
 	}
 }
 
 void ActorCompiler::compileStatement(Function* func, WaitStatement* stmt, const Context& ctx) {
-	// Generate a continuation label for code after the wait and a unique callback index
-	std::string contLabel = generateLabel();
-	Function* contFunc = getFunction(contLabel);
+	// Generate continuation method names and callback index
 	int cbIndex = nextCallbackIndex();
+	std::string whenMethodName = "a_body1when" + std::to_string(cbIndex + 1);
+	std::string contMethodName = "a_body1cont" + std::to_string(cbIndex + 1);
+
+	// If this is a state variable result, ensure it's in stateVariables
+	if (stmt->resultIsState && !stmt->result.name.empty()) {
+		stateVariables.insert(stmt->result.name);
+		stateVariableTypes[stmt->result.name] = stmt->result.type;
+	}
 
 	// Track callback for later class generation
 	CallbackInfo cb;
 	cb.type = stmt->result.type;
 	cb.index = cbIndex;
-	cb.continueLabel = contLabel;
+	cb.continueLabel = whenMethodName;  // Store when method name for callback generation
 	cb.resultName = stmt->result.name;
 	cb.resultIsState = stmt->resultIsState;
-	cb.errorHandler = ctx.catchHandler;
-	cb.errorVarName = ctx.errorVarName;
+	cb.errorHandler = "a_body1Catch1";
+	cb.errorVarName = "error";
 	callbacks.push_back(cb);
 
 	// Use a unique future variable per wait to avoid name collisions
-	std::string futureVar =
-	    (cbIndex == 0) ? std::string("__when_expr") : std::string("__when_expr_") + std::to_string(cbIndex);
+	std::string futureVar = "__when_expr_" + std::to_string(cbIndex);
 
 	// Emit the wait expression assignment to a StrictFuture
 	func->writeLine("StrictFuture<" + stmt->result.type + "> " + futureVar + " = " + stmt->futureExpression + ";");
 
+	// Check for cancellation
+	std::string actorBase =
+	    actor.returnType.empty() ? std::string("Actor<void>") : (std::string("Actor<") + actor.returnType + ">");
+	func->writeLine("if (static_cast<" + className + "*>(this)->actor_wait_state < 0) return a_body1Catch1(actor_cancelled(), loopDepth);");
+
 	// Check if the future is already ready (fast path optimization)
-	func->writeLine("if (" + futureVar + ".isReady()) {");
-	func->indent(+1);
+	func->writeLine("if (" + futureVar + ".isReady()) { if (" + futureVar + ".isError()) return a_body1Catch1(" +
+	                futureVar + ".getError(), loopDepth); else return " + whenMethodName + "(" + futureVar + ".get(), loopDepth); };");
 
-	// Check for error in ready future
-	func->writeLine("if (" + futureVar + ".isError()) {");
-	func->indent(+1);
-	if (!ctx.catchHandler.empty()) {
-		// Jump to error handler if one is set
-		func->writeLine(ctx.errorVarName + " = " + futureVar + ".getError();");
-		func->writeLine("goto " + ctx.catchHandler + ";");
-	} else {
-		// Re-throw if no handler
-		func->writeLine("throw " + futureVar + ".getError();");
-	}
-	func->indent(-1);
-	func->writeLine("} else {");
-	func->indent(+1);
-
-	// Extract value from ready future
-	if (stmt->resultIsState) {
-		// State variable - assign directly to member
-		func->writeLine(stmt->result.name + " = " + futureVar + ".get();");
-		func->writeLine("goto " + contLabel + ";");
-	} else {
-		// Local variable - pass as parameter to continuation (not yet supported)
-		func->writeLine("// TODO: Non-state wait result not fully implemented");
-		func->writeLine(stmt->result.type + " " + stmt->result.name + " = " + futureVar + ".get();");
-		func->writeLine("goto " + contLabel + ";");
-	}
-	func->indent(-1);
-	func->writeLine("}");
-	func->indent(-1);
-
-	func->writeLine("} else {");
-	func->indent(+1);
 	// Future not ready - set up async callback and suspend
-	{
-		std::string actorBase =
-		    actor.returnType.empty() ? std::string("Actor<void>") : (std::string("Actor<") + actor.returnType + ">");
-		func->writeLine("static_cast<" + actorBase + "*>(this)->actor_wait_state = " + std::to_string(cbIndex + 1) +
-		                ";");
-		func->writeLine(futureVar + ".addCallbackAndClear(static_cast<ActorCallback< " + className + ", " +
-		                std::to_string(cbIndex) + ", " + stmt->result.type + " >*>(this));");
-		func->writeLine("return 0; // Suspend until callback fires");
-	}
-	func->indent(-1);
-	func->writeLine("}");
+	func->writeLine("static_cast<" + className + "*>(this)->actor_wait_state = " + std::to_string(cbIndex + 1) + ";");
+	func->writeLine(futureVar + ".addCallbackAndClear(static_cast<ActorCallback< " + className + ", " +
+	                std::to_string(cbIndex) + ", " + stmt->result.type + " >*>(static_cast<" + className + "*>(this)));");
+	func->writeLine("loopDepth = 0;");
 
-	// Emit continuation label
-	func->writeLine("");
-	// Resume point for this wait
-	func->writeLine("resume_" + std::to_string(cbIndex + 1) + ":");
-	{
-		std::string actorBase =
-		    actor.returnType.empty() ? std::string("Actor<void>") : (std::string("Actor<") + actor.returnType + ">");
-		func->writeLine("static_cast<" + actorBase + "*>(this)->actor_wait_state = 0;");
-		// Check if callback set an error (error callback stores error in errorVarName)
-		if (!ctx.catchHandler.empty() && !ctx.errorVarName.empty()) {
-			func->writeLine("if (" + ctx.errorVarName + ".code() != invalid_error_code) {");
-			func->indent(+1);
-			func->writeLine("goto " + ctx.catchHandler + ";");
-			func->indent(-1);
-			func->writeLine("}");
-		}
-	}
-	func->writeLine(contLabel + ":");
-	// The continuation function will be filled in by subsequent compileStatement calls
+	// Now generate the when methods (const& and && overloads)
+	generateWhenMethod(whenMethodName, contMethodName, stmt->result.type, stmt->result.name, cbIndex);
+
+	// Set pending continuation so subsequent statements go into the cont method
+	pendingContinuation = getFunction(contMethodName);
 }
 
 void ActorCompiler::compileStatement(Function* func, IfStatement* stmt, const Context& ctx) {
@@ -800,6 +798,52 @@ void ActorCompiler::compileStatement(Function* func, ThrowStatement* stmt, const
 	}
 }
 
+void ActorCompiler::generateWhenMethod(const std::string& whenMethodName,
+                                        const std::string& contMethodName,
+                                        const std::string& type,
+                                        const std::string& resultName,
+                                        int cbIndex) {
+	// Generate const& overload
+	Function* whenFuncConst = getFunction(whenMethodName);
+	whenFuncConst->returnType = "int";
+	whenFuncConst->formalParameters = {type + " const& __" + resultName, "int loopDepth"};
+	if (!resultName.empty()) {
+		whenFuncConst->writeLine(resultName + " = __" + resultName + ";");
+	}
+	whenFuncConst->writeLine("loopDepth = " + contMethodName + "(loopDepth);");
+	whenFuncConst->writeLine("return loopDepth;");
+	whenFuncConst->endIsUnreachable = true;
+
+	// Generate && overload (separate function with overload marker)
+	Function* whenFuncMove = getFunction(whenMethodName + "_rvalue");
+	whenFuncMove->name = whenMethodName;  // Same name for overload
+	whenFuncMove->returnType = "int";
+	whenFuncMove->formalParameters = {type + " && __" + resultName, "int loopDepth"};
+	if (!resultName.empty()) {
+		whenFuncMove->writeLine(resultName + " = std::move(__" + resultName + ");");
+	}
+	whenFuncMove->writeLine("loopDepth = " + contMethodName + "(loopDepth);");
+	whenFuncMove->writeLine("return loopDepth;");
+	whenFuncMove->endIsUnreachable = true;
+
+	// Create the continuation method (body will be filled by subsequent compilation)
+	Function* contFunc = getFunction(contMethodName);
+	contFunc->returnType = "int";
+	contFunc->formalParameters = {"int loopDepth"};
+
+	// Generate exitChoose cleanup method
+	std::string exitMethodName = "a_exitChoose" + std::to_string(cbIndex + 1);
+	Function* exitFunc = getFunction(exitMethodName);
+	exitFunc->returnType = "void";
+	exitFunc->formalParameters = {};
+	exitFunc->writeLine("if (static_cast<" + className + "*>(this)->actor_wait_state > 0) static_cast<" + className +
+	                    "*>(this)->actor_wait_state = 0;");
+	exitFunc->writeLine("static_cast<" + className + "*>(this)->ActorCallback< " + className + ", " +
+	                    std::to_string(cbIndex) + ", " + type + " >::remove();");
+	exitFunc->writeLine("");
+	exitFunc->endIsUnreachable = true;
+}
+
 // ========== Code Generation Main Methods ==========
 
 void ActorCompiler::writeActorFunction(std::ostream& writer, const std::string& fullReturnType) {
@@ -872,7 +916,7 @@ void ActorCompiler::writeActorClass(std::ostream& writer, const std::string& ful
 	// Class declaration with inheritance
 	std::string returnType = actor.returnType.empty() ? "void" : actor.returnType;
 	writer << "class " << className << " final : public Actor<" << returnType << ">, " << callbackBases
-	       << "public FastAllocated<" << fullClassName << ">, public " << fullStateClassName << " {\n";
+	       << "public FastAllocated<" << fullClassName << ">, public " << stateClassName << "<" << className << "> {\n";
 	writer << "public:\n";
 	writer << "\tusing FastAllocated<" << fullClassName << ">::operator new;\n";
 	writer << "\tusing FastAllocated<" << fullClassName << ">::operator delete;\n";
@@ -911,22 +955,37 @@ void ActorCompiler::writeActorClass(std::ostream& writer, const std::string& ful
 
 	lineNumber(writer, actor.sourceLine);
 
-	// Constructor - simplified for now, calls the body continuation to start execution
+	// Constructor with proper initialization list
 	writeTemplate(writer);
-	writer << "\t" << className << "(" << join(parameterList(), ", ") << ") : " << fullStateClassName << "("
-	       << join(
-	              [&]() {
-		              std::vector<std::string> names;
-		              for (const auto& p : actor.parameters) {
-			              names.push_back(p.name);
-		              }
-		              return names;
-	              }(),
-	              ", ")
-	       << ") {\n";
-	writer << "\t\t// TODO: Initialize actor state\n";
-	writer << "\t\t// Kick off actor by invoking the first continuation\n";
-	writer << "\t\tthis->" << (body && !body->name.empty() ? body->name : std::string("body")) << "(0);\n";
+	// Reuse returnType variable already declared above at line 897
+	std::vector<std::string> paramNames;
+	for (const auto& p : actor.parameters) {
+		paramNames.push_back(p.name);
+	}
+
+	writer << "\t" << className << "(" << join(parameterList(), ", ") << ")\n";
+	writer << "\t\t : Actor<" << returnType << ">(),\n";
+	writer << "\t\t   " << stateClassName << "<" << className << ">(" << join(paramNames, ", ") << "),\n";
+	writer << "\t\t   activeActorHelper(__actorIdentifier)\n";
+	writer << "\t{\n";
+
+	// ACAC instrumentation
+	writer << "\t\t#ifdef WITH_ACAC\n";
+	auto constructorBlockKey = sourceFile + ":" + actor.name + ":constructor";
+	auto constructorBlockId = getUidFromString(constructorBlockKey);
+	uidObjects[constructorBlockId] = constructorBlockKey;
+	writer << "\t\tstatic constexpr ActorBlockIdentifier __identifier = UID("
+	       << constructorBlockId.first << "UL, " << constructorBlockId.second << "UL);\n";
+	writer << "\t\tActorExecutionContextHelper __helper(this->activeActorHelper.actorID, __identifier);\n";
+	writer << "\t\t#endif // WITH_ACAC\n";
+
+	// Lineage support
+	writer << "\t\t#ifdef ENABLE_SAMPLING\n";
+	writer << "\t\tthis->lineage.setActorName(\"" << actor.name << "\");\n";
+	writer << "\t\tLineageScope _(&this->lineage);\n";
+	writer << "\t\t#endif\n";
+
+	writer << "\t\tthis->a_body1();\n";
 	writer << "\t}\n";
 
 	// Cancel function - invokes error callback with actor_cancelled()
@@ -951,45 +1010,77 @@ void ActorCompiler::writeActorClass(std::ostream& writer, const std::string& ful
 
 	// Emit callback handlers for each registered callback index
 	for (const auto& cb : callbacks) {
-		// a_callback_fire - callback fires when wait completes successfully
+		std::string exitMethodName = "a_exitChoose" + std::to_string(cb.index + 1);
+		std::string whenMethodName = cb.continueLabel;  // This is the when method name
+		std::string catchMethodName = cb.errorHandler;
+
+		// a_callback_fire - const& overload
 		writer << "\tvoid a_callback_fire(ActorCallback< " << className << ", " << cb.index << ", " << cb.type
 		       << " >*, " << cb.type << " const& value) {\n";
-		writer << "\t\tfreeAfter(static_cast<Actor<" << (actor.returnType.empty() ? "void" : actor.returnType)
-		       << ">*>(this));\n";
-		writer << "\t\tint oldstate = static_cast<Actor<" << (actor.returnType.empty() ? "void" : actor.returnType)
-		       << ">*>(this)->actor_wait_state;\n";
-		writer << "\t\tstatic_cast<Actor<" << (actor.returnType.empty() ? "void" : actor.returnType)
-		       << ">*>(this)->actor_wait_state = 0;\n";
-		if (cb.resultIsState && !cb.resultName.empty()) {
-			writer << "\t\tthis->" << cb.resultName << " = value;\n";
-		} else {
-			writer << "\t\t// NOTE: non-state wait result variable '" << cb.resultName
-			       << "' not yet supported in callback\n";
-		}
-		writer << "\t\tthis->body(0);\n";
+		writer << "\t\t#ifdef WITH_ACAC\n";
+		auto callbackFireKey = sourceFile + ":" + actor.name + ":callback_fire:" + std::to_string(cb.index);
+		auto callbackFireId = getUidFromString(callbackFireKey);
+		uidObjects[callbackFireId] = callbackFireKey;
+		writer << "\t\tstatic constexpr ActorBlockIdentifier __identifier = UID(" << callbackFireId.first
+		       << "UL, " << callbackFireId.second << "UL);\n";
+		writer << "\t\tActorExecutionContextHelper __helper(static_cast<" << className
+		       << "*>(this)->activeActorHelper.actorID, __identifier);\n";
+		writer << "\t\t#endif // WITH_ACAC\n";
+		writer << "\t\t" << exitMethodName << "();\n";
+		writer << "\t\ttry {\n";
+		writer << "\t\t\t" << whenMethodName << "(value, 0);\n";
+		writer << "\t\t}\n";
+		writer << "\t\tcatch (Error& error) {\n";
+		writer << "\t\t\t" << catchMethodName << "(error, 0);\n";
+		writer << "\t\t} catch (...) {\n";
+		writer << "\t\t\t" << catchMethodName << "(unknown_error(), 0);\n";
+		writer << "\t\t}\n";
+		writer << "\n";
 		writer << "\t}\n";
 
-		// a_callback_error - callback fires when wait completes with error
+		// a_callback_fire - && overload
+		writer << "\tvoid a_callback_fire(ActorCallback< " << className << ", " << cb.index << ", " << cb.type
+		       << " >*, " << cb.type << " && value) {\n";
+		writer << "\t\t#ifdef WITH_ACAC\n";
+		writer << "\t\tstatic constexpr ActorBlockIdentifier __identifier = UID(" << callbackFireId.first
+		       << "UL, " << callbackFireId.second << "UL);\n";
+		writer << "\t\tActorExecutionContextHelper __helper(static_cast<" << className
+		       << "*>(this)->activeActorHelper.actorID, __identifier);\n";
+		writer << "\t\t#endif // WITH_ACAC\n";
+		writer << "\t\t" << exitMethodName << "();\n";
+		writer << "\t\ttry {\n";
+		writer << "\t\t\t" << whenMethodName << "(std::move(value), 0);\n";
+		writer << "\t\t}\n";
+		writer << "\t\tcatch (Error& error) {\n";
+		writer << "\t\t\t" << catchMethodName << "(error, 0);\n";
+		writer << "\t\t} catch (...) {\n";
+		writer << "\t\t\t" << catchMethodName << "(unknown_error(), 0);\n";
+		writer << "\t\t}\n";
+		writer << "\n";
+		writer << "\t}\n";
+
+		// a_callback_error
 		writer << "\tvoid a_callback_error(ActorCallback< " << className << ", " << cb.index << ", " << cb.type
 		       << " >*, Error err) {\n";
-		writer << "\t\tfreeAfter(static_cast<Actor<" << (actor.returnType.empty() ? "void" : actor.returnType)
-		       << ">*>(this));\n";
-		writer << "\t\tint oldstate = static_cast<Actor<" << (actor.returnType.empty() ? "void" : actor.returnType)
-		       << ">*>(this)->actor_wait_state;\n";
-		writer << "\t\tstatic_cast<Actor<" << (actor.returnType.empty() ? "void" : actor.returnType)
-		       << ">*>(this)->actor_wait_state = 0;\n";
-
-		// If we have an error handler, invoke it; otherwise throw
-		if (!cb.errorHandler.empty()) {
-			// Store error in the error variable and goto the handler
-			writer << "\t\tthis->" << cb.errorVarName << " = err;\n";
-			writer << "\t\tthis->body(0); // Will goto error handler at next resume point\n";
-		} else {
-			// No error handler, throw the error
-			writer << "\t\tdelete static_cast<Actor<" << (actor.returnType.empty() ? "void" : actor.returnType)
-			       << ">*>(this);\n";
-			writer << "\t\tthrow err;\n";
-		}
+		writer << "\t\t#ifdef WITH_ACAC\n";
+		auto callbackErrorKey = sourceFile + ":" + actor.name + ":callback_error:" + std::to_string(cb.index);
+		auto callbackErrorId = getUidFromString(callbackErrorKey);
+		uidObjects[callbackErrorId] = callbackErrorKey;
+		writer << "\t\tstatic constexpr ActorBlockIdentifier __identifier = UID(" << callbackErrorId.first
+		       << "UL, " << callbackErrorId.second << "UL);\n";
+		writer << "\t\tActorExecutionContextHelper __helper(static_cast<" << className
+		       << "*>(this)->activeActorHelper.actorID, __identifier);\n";
+		writer << "\t\t#endif // WITH_ACAC\n";
+		writer << "\t\t" << exitMethodName << "();\n";
+		writer << "\t\ttry {\n";
+		writer << "\t\t\t" << catchMethodName << "(err, 0);\n";
+		writer << "\t\t}\n";
+		writer << "\t\tcatch (Error& error) {\n";
+		writer << "\t\t\t" << catchMethodName << "(error, 0);\n";
+		writer << "\t\t} catch (...) {\n";
+		writer << "\t\t\t" << catchMethodName << "(unknown_error(), 0);\n";
+		writer << "\t\t}\n";
+		writer << "\n";
 		writer << "\t}\n";
 	}
 
@@ -1054,12 +1145,14 @@ void ActorCompiler::writeFunction(std::ostream& writer, Function* func) {
 	std::string returnTypeStr = func->returnType.empty() ? "int" : func->returnType + " ";
 	writer << "\t" << returnTypeStr << func->name << "(";
 
-	// Formal parameters: loopDepth for continuation tracking
+	// Formal parameters
 	if (!func->formalParameters.empty()) {
 		writer << join(func->formalParameters, ", ");
-	} else {
+	} else if (func->returnType != "void") {
+		// Only add default loopDepth for non-void functions (body/cont methods)
 		writer << "int loopDepth";
 	}
+	// else: void return type (exitChoose methods) - no parameters
 
 	writer << ")";
 
@@ -1070,23 +1163,23 @@ void ActorCompiler::writeFunction(std::ostream& writer, Function* func) {
 
 	writer << " {\n";
 
-	// Resume switch: if resuming from a wait, jump to the appropriate resume label
-	if (func->name == "body" && !callbacks.empty()) {
-		std::string actorBase =
-		    actor.returnType.empty() ? std::string("Actor<void>") : (std::string("Actor<") + actor.returnType + ">");
-		writer << "\t\tif (static_cast<" << actorBase << "*>(this)->actor_wait_state > 0) {\n";
-		writer << "\t\t\tswitch (static_cast<" << actorBase << "*>(this)->actor_wait_state) {\n";
-		for (size_t i = 0; i < callbacks.size(); ++i) {
-			writer << "\t\t\t\tcase " << (i + 1) << ": goto resume_" << (i + 1) << ";\n";
-		}
-		writer << "\t\t\t}\n";
-		writer << "\t\t}\n\n";
+	// Determine if this function needs try-catch wrapper
+	// Apply to a_body and a_cont methods, but NOT to a_when methods (they're called from within try-catch)
+	bool needsTryCatch = ((func->name.find("a_body") == 0 || func->name.find("a_cont") == 0 || func->name.find("a_Body") == 0 || func->name.find("a_Cont") == 0) &&
+	                      func->name.find("Catch") == std::string::npos &&
+	                      func->name.find("when") == std::string::npos &&
+	                      func->name.find("When") == std::string::npos);
+
+	// Add try block if needed
+	if (needsTryCatch) {
+		writer << "\t\ttry {\n";
 	}
 
 	// Function body
 	std::string bodyText = func->getBodyText();
 	if (!bodyText.empty()) {
-		// Add indentation to each line
+		// Add indentation to each line (extra indent if in try block)
+		std::string baseIndent = needsTryCatch ? "\t\t" : "\t";
 		size_t pos = 0;
 		while (pos < bodyText.length()) {
 			size_t endPos = bodyText.find('\n', pos);
@@ -1096,13 +1189,23 @@ void ActorCompiler::writeFunction(std::ostream& writer, Function* func) {
 
 			std::string line = bodyText.substr(pos, endPos - pos);
 			if (!line.empty()) {
-				writer << "\t" << line << "\n";
+				writer << baseIndent << line << "\n";
 			} else {
 				writer << "\n";
 			}
 
 			pos = endPos + 1;
 		}
+	}
+
+	// Add catch blocks if needed
+	if (needsTryCatch) {
+		writer << "\t\t}\n";
+		writer << "\t\tcatch (Error& error) {\n";
+		writer << "\t\t\tloopDepth = a_body1Catch1(error, loopDepth);\n";
+		writer << "\t\t} catch (...) {\n";
+		writer << "\t\t\tloopDepth = a_body1Catch1(unknown_error(), loopDepth);\n";
+		writer << "\t\t}\n";
 	}
 
 	// Return statement if not unreachable
