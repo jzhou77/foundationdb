@@ -741,6 +741,11 @@ void ActorCompiler::compileStatement(Function* func, TryStatement* stmt, const C
 	int catchIndex = nextCatchHandlerIndex();
 	std::string catchMethodName = "a_body1Catch" + std::to_string(catchIndex);
 
+	// Synchronize callback counter with catch handler index to ensure continuations
+	// are numbered correctly. Catch2 uses index 2, so next continuation should be cont2 (not cont1).
+	// Since continuation is named "cont" + (cbIndex+1), we need cbIndex >= catchIndex-1.
+	callbackCounter = std::max(callbackCounter, catchIndex - 1);
+
 	// Create the catch continuation method
 	Function* catchFunc = getFunction(catchMethodName);
 	catchFunc->returnType = "int";
@@ -1014,10 +1019,11 @@ void ActorCompiler::writeActorClass(std::ostream& writer, const std::string& ful
 		writer << "\t\tstatic_cast<Actor<" << (actor.returnType.empty() ? "void" : actor.returnType)
 		       << ">*>(this)->actor_wait_state = -1;\n";
 		writer << "\t\tswitch (wait_state) {\n";
-		// Group callbacks by index (in C# they group by CallbackGroup, but we use index)
+		// Generate case for each callback using actual callback index
 		for (size_t i = 0; i < callbacks.size(); ++i) {
-			writer << "\t\tcase " << (i + 1) << ": this->a_callback_error(static_cast<ActorCallback<" << className
-			       << ", " << i << ", " << callbacks[i].type << ">*>(nullptr), actor_cancelled()); break;\n";
+			int cbIndex = callbacks[i].index;
+			writer << "\t\tcase " << (cbIndex + 1) << ": this->a_callback_error(static_cast<ActorCallback<" << className
+			       << ", " << cbIndex << ", " << callbacks[i].type << ">*>(nullptr), actor_cancelled()); break;\n";
 		}
 		writer << "\t\t}\n";
 	}
