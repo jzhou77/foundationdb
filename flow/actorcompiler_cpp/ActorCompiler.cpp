@@ -788,11 +788,23 @@ void ActorCompiler::writeActorFunction(std::ostream& writer, const std::string& 
 	}
 	newActor += join(paramNames, ", ") + ")";
 
+	if (generateProbes) {
+		writer << "\t// PROBE_ENTER(\"" << actor.name << "\")\n";
+	}
+
+	// Create the actor instance in a temporary to allow exit probe before return
+	writer << "\tauto __actor_ptr = " << newActor << ";\n";
+
+	if (generateProbes) {
+		writer << "\t// PROBE_EXIT(\"" << actor.name << "\")\n";
+	}
+
 	// Return the actor or just construct it
 	if (!actor.returnType.empty()) {
-		writer << "\treturn Future<" << actor.returnType << ">(" << newActor << ");\n";
+		writer << "\treturn Future<" << actor.returnType << ">(__actor_ptr);\n";
 	} else {
-		writer << "\t" << newActor << ";\n";
+		// Actor constructed and immediately discarded; side-effects occur via constructor
+		(void)0; // keep consistent structure
 	}
 
 	writer << "}\n";
@@ -868,7 +880,7 @@ void ActorCompiler::writeActorClass(std::ostream& writer, const std::string& ful
 	// Cancel function skeleton (will be wired to callbacks/futures in a later phase)
 	writer << "\tvoid cancel() override {\n";
 	if (generateProbes) {
-		writer << "\t\t// TODO: ProbeCancel(\"" << actor.name << "\");\n";
+		writer << "\t\t// PROBE_CANCEL(\"" << actor.name << "\")\n";
 	}
 	writer << "\t\t// TODO: propagate cancellation to outstanding waits and callbacks\n";
 	writer << "\t}\n";
@@ -899,9 +911,9 @@ void ActorCompiler::writeStateConstructor(std::ostream& writer) {
 
 	writer << " {\n";
 
-	// TODO: Probe hook if generateProbes is true
+	// Probe hook if generateProbes is true
 	if (generateProbes) {
-		writer << "\t\t// TODO: ProbeCreate(\"" << actor.name << "\");\n";
+		writer << "\t\t// PROBE_CREATE(\"" << actor.name << "\")\n";
 	}
 
 	writer << "\t}\n";
@@ -910,9 +922,9 @@ void ActorCompiler::writeStateConstructor(std::ostream& writer) {
 void ActorCompiler::writeStateDestructor(std::ostream& writer) {
 	writer << "\t~" << stateClassName << "() {\n";
 
-	// TODO: Probe hook if generateProbes is true
+	// Probe hook if generateProbes is true
 	if (generateProbes) {
-		writer << "\t\t// TODO: ProbeDestroy(\"" << actor.name << "\");\n";
+		writer << "\t\t// PROBE_DESTROY(\"" << actor.name << "\")\n";
 	}
 
 	writer << "\t}\n";

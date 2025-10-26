@@ -298,6 +298,79 @@ ACTOR Future<int> start_me() {
 	std::cout << "✓ Test passed\n\n";
 }
 
+void testTemplateActor() {
+	std::cout << "Test: Template actor support\n";
+
+	std::string sourceCode = R"(
+template <class T>
+ACTOR Future<T> identity(T x) {
+	return x;
+}
+)";
+
+	ErrorMessagePolicy policy;
+	ActorParser parser(sourceCode, "test.actor.cpp", policy, /*generateProbes*/ false);
+
+	std::ostringstream output;
+	parser.write(output, "out.cpp");
+
+	std::string code = output.str();
+	std::cout << "Generated code:\n" << code << "\n";
+
+	// Template declarations should be present
+	assert(code.find("template <") != std::string::npos);
+	assert(code.find("class T") != std::string::npos);
+	assert(code.find("Future<T>") != std::string::npos);
+	assert(code.find("identity") != std::string::npos);
+
+	std::cout << "✓ Test passed\n\n";
+}
+
+void testProbesEnabledDisabled() {
+	std::cout << "Test: Probes toggled by generateProbes flag\n";
+
+	std::string sourceCode = R"(
+ACTOR Future<int> monitored() {
+	return 42;
+}
+)";
+
+	// Test with probes disabled
+	{
+		std::cout << "  Testing with generateProbes=false...\n";
+		ErrorMessagePolicy policy;
+		ActorParser parser(sourceCode, "test.actor.cpp", policy, /*generateProbes*/ false);
+		std::ostringstream output;
+		parser.write(output, "out.cpp");
+		std::string code = output.str();
+
+		// No probe markers should be present
+		assert(code.find("PROBE_") == std::string::npos);
+		std::cout << "  ✓ No probe markers found (expected)\n";
+	}
+
+	// Test with probes enabled
+	{
+		std::cout << "  Testing with generateProbes=true...\n";
+		ErrorMessagePolicy policy;
+		ActorParser parser(sourceCode, "test.actor.cpp", policy, /*generateProbes*/ true);
+		std::ostringstream output;
+		parser.write(output, "out.cpp");
+		std::string code = output.str();
+
+		// Probe markers should be present
+		assert(code.find("PROBE_CREATE") != std::string::npos);
+		assert(code.find("PROBE_DESTROY") != std::string::npos);
+		assert(code.find("PROBE_ENTER") != std::string::npos);
+		assert(code.find("PROBE_EXIT") != std::string::npos);
+		assert(code.find("PROBE_CANCEL") != std::string::npos);
+
+		std::cout << "  ✓ All probe markers found (expected)\n";
+	}
+
+	std::cout << "✓ Test passed\n\n";
+}
+
 int main() {
 	std::cout << "=== Code Generation Smoke Tests ===\n\n";
 
@@ -312,6 +385,8 @@ int main() {
 		testChooseWhenActor();
 		testTryCatchActor();
 		testConstructorAndCancel();
+		testTemplateActor();
+		testProbesEnabledDisabled();
 
 		std::cout << "All tests passed!\n";
 		return 0;
