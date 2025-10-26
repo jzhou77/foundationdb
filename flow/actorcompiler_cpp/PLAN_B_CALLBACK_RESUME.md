@@ -3,6 +3,8 @@
 **Date:** October 25, 2025  
 **Goal:** Implement remaining critical pieces for functional actor code generation before comprehensive testing
 
+Remember, check C# implementation for reference.
+
 ---
 
 ## Overview

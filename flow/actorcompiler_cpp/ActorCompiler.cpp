@@ -218,14 +218,6 @@ void ActorCompiler::write(std::ostream& writer) {
 		}
 	}
 
-	// Track outstanding waits for cancellation
-	if (!callbacks.empty()) {
-		writer << "\t// Outstanding futures for cancellation propagation\n";
-		for (size_t i = 0; i < callbacks.size(); ++i) {
-			writer << "\tSAV<" << callbacks[i].type << ">* __outstanding_wait_" << i << " = nullptr;\n";
-		}
-	}
-
 	writer << "};\n";
 
 	// ===== Write Actor Class =====
@@ -485,8 +477,6 @@ void ActorCompiler::compileStatement(Function* func, WaitStatement* stmt, const 
 		    actor.returnType.empty() ? std::string("Actor<void>") : (std::string("Actor<") + actor.returnType + ">");
 		func->writeLine("static_cast<" + actorBase + "*>(this)->actor_wait_state = " + std::to_string(cbIndex + 1) +
 		                ";");
-		// Store outstanding wait for cancellation
-		func->writeLine("__outstanding_wait_" + std::to_string(cbIndex) + " = " + futureVar + ".extractPtr();");
 		func->writeLine(futureVar + ".addCallbackAndClear(static_cast<ActorCallback< " + className + ", " +
 		                std::to_string(cbIndex) + ", " + stmt->result.type + " >*>(this));");
 		func->writeLine("return 0; // Suspend until callback fires");
@@ -502,8 +492,6 @@ void ActorCompiler::compileStatement(Function* func, WaitStatement* stmt, const 
 		std::string actorBase =
 		    actor.returnType.empty() ? std::string("Actor<void>") : (std::string("Actor<") + actor.returnType + ">");
 		func->writeLine("static_cast<" + actorBase + "*>(this)->actor_wait_state = 0;");
-		// Clear outstanding wait pointer since callback has fired
-		func->writeLine("__outstanding_wait_" + std::to_string(cbIndex) + " = nullptr;");
 		// Check if callback set an error (error callback stores error in errorVarName)
 		if (!ctx.catchHandler.empty() && !ctx.errorVarName.empty()) {
 			func->writeLine("if (" + ctx.errorVarName + ".code() != invalid_error_code) {");
@@ -941,20 +929,23 @@ void ActorCompiler::writeActorClass(std::ostream& writer, const std::string& ful
 	writer << "\t\tthis->" << (body && !body->name.empty() ? body->name : std::string("body")) << "(0);\n";
 	writer << "\t}\n";
 
-	// Cancel function skeleton (will be wired to callbacks/futures in a later phase)
+	// Cancel function - invokes error callback with actor_cancelled()
 	writer << "\tvoid cancel() override {\n";
 	if (generateProbes) {
 		writer << "\t\t// PROBE_CANCEL(\"" << actor.name << "\")\n";
 	}
-	// Propagate cancellation to all outstanding waits
 	if (!callbacks.empty()) {
-		writer << "\t\t// Cancel all outstanding waits\n";
+		writer << "\t\tauto wait_state = static_cast<Actor<" << (actor.returnType.empty() ? "void" : actor.returnType)
+		       << ">*>(this)->actor_wait_state;\n";
+		writer << "\t\tstatic_cast<Actor<" << (actor.returnType.empty() ? "void" : actor.returnType)
+		       << ">*>(this)->actor_wait_state = -1;\n";
+		writer << "\t\tswitch (wait_state) {\n";
+		// Group callbacks by index (in C# they group by CallbackGroup, but we use index)
 		for (size_t i = 0; i < callbacks.size(); ++i) {
-			writer << "\t\tif (__outstanding_wait_" << i << ") {\n";
-			writer << "\t\t\t__outstanding_wait_" << i << "->cancel();\n";
-			writer << "\t\t\t__outstanding_wait_" << i << " = nullptr;\n";
-			writer << "\t\t}\n";
+			writer << "\t\tcase " << (i + 1) << ": this->a_callback_error(static_cast<ActorCallback<" << className
+			       << ", " << i << ", " << callbacks[i].type << ">*>(nullptr), actor_cancelled()); break;\n";
 		}
+		writer << "\t\t}\n";
 	}
 	writer << "\t}\n";
 
