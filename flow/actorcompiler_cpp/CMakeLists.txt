@@ -198,3 +198,18 @@ target_include_directories(actorcompiler_cpp_error_handling PRIVATE ${CMAKE_CURR
 target_compile_features(actorcompiler_cpp_error_handling PRIVATE cxx_std_17)
 target_link_libraries(actorcompiler_cpp_error_handling PRIVATE OpenSSL::Crypto)
 add_test(NAME ActorCompilerErrorHandling COMMAND actorcompiler_cpp_error_handling)
+
+add_executable(actorcompiler_cpp_runtime_actors
+  tests/runtime_actor_test.cpp
+  Tokenizer.cpp
+  Token.cpp
+  ParseTree.cpp
+  ActorParser.cpp
+  ActorCompiler.cpp
+  Function.cpp
+  Context.cpp
+)
+target_include_directories(actorcompiler_cpp_runtime_actors PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(actorcompiler_cpp_runtime_actors PRIVATE cxx_std_17)
+target_link_libraries(actorcompiler_cpp_runtime_actors PRIVATE OpenSSL::Crypto)
+add_test(NAME ActorCompilerRuntimeActors COMMAND actorcompiler_cpp_runtime_actors WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
