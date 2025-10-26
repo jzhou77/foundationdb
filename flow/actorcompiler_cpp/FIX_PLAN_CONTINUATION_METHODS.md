@@ -1,5 +1,7 @@
 # Fix Plan: Implement C# Continuation Method Pattern
 
+The goal is to have a C++ implementation of actor compiler, modeled after the C# implementation at flow/actorcompiler directory. The C++ implementation is at flow/actorcompiler_cpp directory.
+
 Remember, check C# implementation for reference.
 
 ## Problem Summary
