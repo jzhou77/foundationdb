@@ -216,6 +216,88 @@ ACTOR Future<int> test() {
 	std::cout << "✓ Test passed - " << uidObjects.size() << " UID(s) generated\n\n";
 }
 
+void testChooseWhenActor() {
+	std::cout << "Test: Actor with choose/when\n";
+
+	// Actor using choose/when
+	std::string sourceCode = R"(
+ACTOR Future<int> chooser(Future<int> a, Future<int> b) {
+	choose {
+		when(int r = wait(a)) { return r; }
+		when(state int r = wait(b)) { return r; }
+	}
+}
+)";
+
+	ErrorMessagePolicy policy;
+	ActorParser parser(sourceCode, "test.actor.cpp", policy, /*generateProbes*/ false);
+
+	std::ostringstream output;
+	parser.write(output, "out.cpp");
+
+	std::string code = output.str();
+	std::cout << "Generated code:\n" << code << "\n";
+
+	// choose/when compiles down to internal when expressions
+	assert(code.find("__when_expr") != std::string::npos);
+
+	std::cout << "✓ Test passed\n\n";
+}
+
+void testTryCatchActor() {
+	std::cout << "Test: Actor with try/catch\n";
+
+	// Actor using try/catch and throw
+	std::string sourceCode = R"(
+ACTOR Future<int> risky() {
+	try {
+		throw operation_failed();
+	} catch (Error &e) {
+		return -1;
+	}
+}
+)";
+
+	ErrorMessagePolicy policy;
+	ActorParser parser(sourceCode, "test.actor.cpp", policy, /*generateProbes*/ false);
+
+	std::ostringstream output;
+	parser.write(output, "out.cpp");
+
+	std::string code = output.str();
+	std::cout << "Generated code:\n" << code << "\n";
+
+	// We expect Error handling artifacts present in generated code
+	assert(code.find("Error") != std::string::npos);
+
+	std::cout << "✓ Test passed\n\n";
+}
+
+void testConstructorAndCancel() {
+	std::cout << "Test: Constructor starts body and cancel() is emitted\n";
+
+	std::string sourceCode = R"(
+ACTOR Future<int> start_me() {
+	return 1;
+}
+)";
+
+	ErrorMessagePolicy policy;
+	ActorParser parser(sourceCode, "test.actor.cpp", policy, /*generateProbes*/ false);
+
+	std::ostringstream output;
+	parser.write(output, "out.cpp");
+
+	std::string code = output.str();
+	std::cout << "Generated code:\n" << code << "\n";
+
+	// Constructor should invoke the first body continuation and cancel() should exist
+	assert(code.find("this->body(") != std::string::npos);
+	assert(code.find("void cancel(") != std::string::npos);
+
+	std::cout << "✓ Test passed\n\n";
+}
+
 int main() {
 	std::cout << "=== Code Generation Smoke Tests ===\n\n";
 
@@ -227,6 +309,9 @@ int main() {
 		testActorWithWait();
 		testForwardDeclaration();
 		testUidGeneration();
+		testChooseWhenActor();
+		testTryCatchActor();
+		testConstructorAndCancel();
 
 		std::cout << "All tests passed!\n";
 		return 0;

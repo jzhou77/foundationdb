@@ -304,6 +304,8 @@ Function* ActorCompiler::getFunction(const std::string& label) {
 
 	// Create new function and register it
 	Function* func = new Function();
+	// Give the function a public name matching the label by default
+	func->name = label;
 	functions[label] = func;
 	return func;
 }
@@ -845,7 +847,7 @@ void ActorCompiler::writeActorClass(std::ostream& writer, const std::string& ful
 
 	lineNumber(writer, actor.sourceLine);
 
-	// Constructor - simplified for now, will expand later
+	// Constructor - simplified for now, calls the body continuation to start execution
 	writeTemplate(writer);
 	writer << "\t" << className << "(" << join(parameterList(), ", ") << ") : " << fullStateClassName << "("
 	       << join(
@@ -859,11 +861,17 @@ void ActorCompiler::writeActorClass(std::ostream& writer, const std::string& ful
 	              ", ")
 	       << ") {\n";
 	writer << "\t\t// TODO: Initialize actor state\n";
-	writer << "\t\t// Call body function\n";
-	writer << "\t\t// " << body->name << "();\n";
+	writer << "\t\t// Kick off actor by invoking the first continuation\n";
+	writer << "\t\tthis->" << (body && !body->name.empty() ? body->name : std::string("body")) << "(0);\n";
 	writer << "\t}\n";
 
-	// TODO: Cancel function if cancellable
+	// Cancel function skeleton (will be wired to callbacks/futures in a later phase)
+	writer << "\tvoid cancel() override {\n";
+	if (generateProbes) {
+		writer << "\t\t// TODO: ProbeCancel(\"" << actor.name << "\");\n";
+	}
+	writer << "\t\t// TODO: propagate cancellation to outstanding waits and callbacks\n";
+	writer << "\t}\n";
 
 	writer << "};\n";
 }
