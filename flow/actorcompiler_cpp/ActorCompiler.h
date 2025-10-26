@@ -78,6 +78,7 @@ private:
 	};
 	std::vector<CallbackInfo> callbacks; // Collected callbacks for this actor
 	int callbackCounter = 0; // Monotonic counter for callback indices
+	int catchHandlerIndex = 2; // Catch handler counter (starts at 2, Catch1 is outer handler)
 
 	// Track continuation function for code flow after wait statements
 	Function* pendingContinuation = nullptr;
@@ -120,6 +121,9 @@ private:
 
 	// Generate next callback index
 	int nextCallbackIndex() { return callbackCounter++; }
+
+	// Generate next catch handler index
+	int nextCatchHandlerIndex() { return catchHandlerIndex++; }
 
 	// Statement compilation - main dispatcher
 	void compile(Function* func, Statement* stmt, const Context& ctx);

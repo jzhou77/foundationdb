@@ -473,7 +473,7 @@ void ActorCompiler::compileStatement(Function* func, WaitStatement* stmt, const 
 	cb.continueLabel = whenMethodName;  // Store when method name for callback generation
 	cb.resultName = stmt->result.name;
 	cb.resultIsState = stmt->resultIsState;
-	cb.errorHandler = "a_body1Catch1";
+	cb.errorHandler = ctx.catchHandler.empty() ? "a_body1Catch1" : ctx.catchHandler;
 	cb.errorVarName = "error";
 	callbacks.push_back(cb);
 
@@ -483,13 +483,12 @@ void ActorCompiler::compileStatement(Function* func, WaitStatement* stmt, const 
 	// Emit the wait expression assignment to a StrictFuture
 	func->writeLine("StrictFuture<" + stmt->result.type + "> " + futureVar + " = " + stmt->futureExpression + ";");
 
-	// Check for cancellation
-	std::string actorBase =
-	    actor.returnType.empty() ? std::string("Actor<void>") : (std::string("Actor<") + actor.returnType + ">");
-	func->writeLine("if (static_cast<" + className + "*>(this)->actor_wait_state < 0) return a_body1Catch1(actor_cancelled(), loopDepth);");
+	// Check for cancellation - route to appropriate error handler
+	std::string errorHandler = ctx.catchHandler.empty() ? "a_body1Catch1" : ctx.catchHandler;
+	func->writeLine("if (static_cast<" + className + "*>(this)->actor_wait_state < 0) return " + errorHandler + "(actor_cancelled(), loopDepth);");
 
 	// Check if the future is already ready (fast path optimization)
-	func->writeLine("if (" + futureVar + ".isReady()) { if (" + futureVar + ".isError()) return a_body1Catch1(" +
+	func->writeLine("if (" + futureVar + ".isReady()) { if (" + futureVar + ".isError()) return " + errorHandler + "(" +
 	                futureVar + ".getError(), loopDepth); else return " + whenMethodName + "(" + futureVar + ".get(), loopDepth); };");
 
 	// Future not ready - set up async callback and suspend
@@ -715,9 +714,6 @@ void ActorCompiler::compileStatement(Function* func, ChooseStatement* stmt, cons
 }
 
 void ActorCompiler::compileStatement(Function* func, TryStatement* stmt, const Context& ctx) {
-	// Simplified try/catch implementation
-	// Full implementation would generate catch handler functions
-
 	// Flow actors only support a single catch clause
 	if (stmt->catches.size() != 1) {
 		throw Error(stmt->firstSourceLine, "try statement must have exactly one catch clause");
@@ -726,7 +722,7 @@ void ActorCompiler::compileStatement(Function* func, TryStatement* stmt, const C
 	const auto& catchClause = stmt->catches[0];
 
 	// Parse the catch expression to extract error variable name
-	std::string errorVarName = "__current_error";
+	std::string errorVarName = "e";
 	std::string catchExpr = catchClause.expression;
 
 	// Remove spaces
@@ -741,40 +737,57 @@ void ActorCompiler::compileStatement(Function* func, TryStatement* stmt, const C
 		}
 	}
 
-	// Generate catch handler label
-	std::string catchLabel = generateLabel();
+	// Generate catch continuation method name (e.g., a_body1Catch2)
+	int catchIndex = nextCatchHandlerIndex();
+	std::string catchMethodName = "a_body1Catch" + std::to_string(catchIndex);
 
-	func->writeLine("// BEGIN try block");
+	// Create the catch continuation method
+	Function* catchFunc = getFunction(catchMethodName);
+	catchFunc->returnType = "int";
+	catchFunc->formalParameters = {"const Error& " + errorVarName, "int loopDepth=0"};
+	catchFunc->endIsUnreachable = true; // We include return in body, don't add another
+
+	// Wrap catch body in try-catch to allow propagation to outer handler
+	catchFunc->writeLine("try {");
+	catchFunc->indent(+1);
+
+	// Compile the catch body into the catch method
+	Context catchCtx = ctx; // Inherit context but no inner catch handler
+	compile(catchFunc, catchClause.body.get(), catchCtx);
+
+	catchFunc->indent(-1);
+	catchFunc->writeLine("}");
+	catchFunc->writeLine("catch (Error& error) {");
+	catchFunc->indent(+1);
+	catchFunc->writeLine("loopDepth = a_body1Catch1(error, loopDepth);");
+	catchFunc->indent(-1);
+	catchFunc->writeLine("} catch (...) {");
+	catchFunc->indent(+1);
+	catchFunc->writeLine("loopDepth = a_body1Catch1(unknown_error(), loopDepth);");
+	catchFunc->indent(-1);
+	catchFunc->writeLine("}");
+	catchFunc->writeLine("");
+	catchFunc->writeLine("return loopDepth;");
+
+	// Now generate the try block in the main function
 	func->writeLine("try {");
 	func->indent(+1);
 
-	// Compile try body with catch context
-	Context tryCtx = ctx.withCatch(errorVarName, "__error_code", catchLabel);
+	// Compile try body with context pointing to inner catch handler
+	Context tryCtx = ctx.withCatch(errorVarName, "unused", catchMethodName);
 	compile(func, stmt->tryBody.get(), tryCtx);
 
 	func->indent(-1);
 	func->writeLine("}");
-	func->writeLine("catch (Error& " + errorVarName + ") {");
+	func->writeLine("catch (Error& error) {");
 	func->indent(+1);
-	func->writeLine("goto " + catchLabel + ";");
+	func->writeLine("loopDepth = " + catchMethodName + "(error, loopDepth);");
+	func->indent(-1);
+	func->writeLine("} catch (...) {");
+	func->indent(+1);
+	func->writeLine("loopDepth = " + catchMethodName + "(unknown_error(), loopDepth);");
 	func->indent(-1);
 	func->writeLine("}");
-	func->writeLine("catch (...) {");
-	func->indent(+1);
-	func->writeLine(errorVarName + " = unknown_error();");
-	func->writeLine("goto " + catchLabel + ";");
-	func->indent(-1);
-	func->writeLine("}");
-
-	// Emit catch handler label and compile catch body
-	func->writeLine("");
-	func->writeLine(catchLabel + ":");
-	func->writeLine("{");
-	func->indent(+1);
-	compile(func, catchClause.body.get(), ctx);
-	func->indent(-1);
-	func->writeLine("}");
-	func->writeLine("// END try block");
 }
 
 void ActorCompiler::compileStatement(Function* func, ThrowStatement* stmt, const Context& ctx) {
