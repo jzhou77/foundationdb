@@ -101,7 +101,8 @@ public:
 	~ActorCompiler();
 
 	// Write generated actor code
-	void write(std::ostream& writer);
+	// startingLineNumber: the physical line number in the output file where actor output begins
+	void write(std::ostream& writer, int startingLineNumber = 0);
 
 	// Get UID mappings
 	const std::map<std::pair<uint64_t, uint64_t>, std::string>& getUidObjects() const { return uidObjects; }

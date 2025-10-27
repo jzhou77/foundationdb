@@ -133,7 +133,10 @@ static void writeTemplate(std::ostream& w,
 	w << "template <" << join(parts, ", ") << ">\n";
 }
 
-void ActorCompiler::write(std::ostream& writer) {
+void ActorCompiler::write(std::ostream& writer, int startingLineNumber) {
+	// Initialize output line tracking with the starting line number from ActorParser
+	outputLineNumber = startingLineNumber;
+
 	// Determine full return type (Future<T> or void)
 	const std::string fullReturnType =
 	    actor.returnType.empty() ? std::string("void") : (std::string("Future<") + actor.returnType + ">");
@@ -194,7 +197,7 @@ void ActorCompiler::write(std::ostream& writer) {
 	// Create the body function and compile the actor body
 	Function* body = getFunction("a_body1");
 	body->returnType = "int";
-	body->formalParameters = {"int loopDepth=0"};
+	body->formalParameters = { "int loopDepth=0" };
 	Context bodyContext = Context::createUnreachable();
 
 	// Compile the actor body
@@ -205,9 +208,8 @@ void ActorCompiler::write(std::ostream& writer) {
 	// Add implicit return if needed (for void actors with no explicit return)
 	if (actor.returnType.empty() && !body->endIsUnreachable) {
 		// Use same SAV pattern as explicit return
-		body->writeLine("if (!static_cast<" + className + "*>(this)->SAV<Void>::futures) { " +
-		                "this->~" + stateClassName + "(); static_cast<" + className +
-		                "*>(this)->destroy(); return 0; }");
+		body->writeLine("if (!static_cast<" + className + "*>(this)->SAV<Void>::futures) { " + "this->~" +
+		                stateClassName + "(); static_cast<" + className + "*>(this)->destroy(); return 0; }");
 		body->writeLine("this->~" + stateClassName + "();");
 		body->writeLine("static_cast<" + className + "*>(this)->finishSendAndDelPromiseRef();");
 		body->writeLine("return 0;");
@@ -216,12 +218,12 @@ void ActorCompiler::write(std::ostream& writer) {
 	// Generate catch handler for body function
 	Function* catchFunc = getFunction("a_body1Catch1");
 	catchFunc->returnType = "int";
-	catchFunc->formalParameters = {"Error error", "int loopDepth=0"};
+	catchFunc->formalParameters = { "Error error", "int loopDepth=0" };
 	catchFunc->endIsUnreachable = true; // We include return in body, don't add another
 	catchFunc->writeLine("this->~" + stateClassName + "();");
 	catchFunc->writeLine("static_cast<" + className + "*>(this)->sendErrorAndDelPromiseRef(error);");
 	catchFunc->writeLine("loopDepth = 0;");
-	catchFunc->writeLine("");  // Blank line before return
+	catchFunc->writeLine(""); // Blank line before return
 	catchFunc->writeLine("return loopDepth;");
 
 	// Begin namespace if top-level and no explicit namespace
@@ -241,6 +243,9 @@ void ActorCompiler::write(std::ostream& writer) {
 	lineNumber(writer, actor.sourceLine);
 	writer << "class " << stateClassName << " {\n";
 	outputLineNumber++;
+	// Emit #line directive to generated file before public: (matching C# behavior)
+	// +2 accounts for: (1) the #line directive itself, (2) the public: line
+	lineNumber(writer, outputLineNumber + 2, generatedFileName);
 	writer << "public:\n";
 	outputLineNumber++;
 
@@ -481,8 +486,8 @@ void ActorCompiler::compileStatement(Function* func, ReturnStatement* stmt, cons
 	std::string expression = stmt->expression.empty() ? "Void()" : stmt->expression;
 
 	// Check if anyone is waiting for the result
-	func->writeLine("if (!static_cast<" + className + "*>(this)->SAV<" + returnType + ">::futures) { (" +
-	                "void)(" + expression + "); this->~" + stateClassName + "(); static_cast<" + className +
+	func->writeLine("if (!static_cast<" + className + "*>(this)->SAV<" + returnType + ">::futures) { (" + "void)(" +
+	                expression + "); this->~" + stateClassName + "(); static_cast<" + className +
 	                "*>(this)->destroy(); return 0; }");
 
 	// Place return value in SAV using placement new
@@ -560,7 +565,7 @@ void ActorCompiler::compileStatement(Function* func, CodeBlock* stmt, const Cont
 void ActorCompiler::compileStatement(Function* func, WaitStatement* stmt, const Context& ctx) {
 	// Generate continuation method names and callback index
 	int cbIndex = nextCallbackIndex();
-	int localWaitIndex = func->getNextWaitIndex();  // Track waits per function for nested naming
+	int localWaitIndex = func->getNextWaitIndex(); // Track waits per function for nested naming
 
 	std::string whenMethodName;
 	std::string contMethodName;
@@ -591,7 +596,7 @@ void ActorCompiler::compileStatement(Function* func, WaitStatement* stmt, const 
 	CallbackInfo cb;
 	cb.type = stmt->result.type;
 	cb.index = cbIndex;
-	cb.continueLabel = whenMethodName;  // Store when method name for callback generation
+	cb.continueLabel = whenMethodName; // Store when method name for callback generation
 	cb.resultName = stmt->result.name;
 	cb.resultIsState = stmt->resultIsState;
 	cb.errorHandler = ctx.catchHandler.empty() ? "a_body1Catch1" : ctx.catchHandler;
@@ -612,16 +617,19 @@ void ActorCompiler::compileStatement(Function* func, WaitStatement* stmt, const 
 
 	// In loop context, adjust loopDepth for error handling
 	std::string loopDepthAdjustment = ctx.loopDepth > 0 ? "std::max(0, loopDepth - 1)" : "loopDepth";
-	func->writeLine("if (static_cast<" + className + "*>(this)->actor_wait_state < 0) return " + errorHandler + "(actor_cancelled(), " + loopDepthAdjustment + ");");
+	func->writeLine("if (static_cast<" + className + "*>(this)->actor_wait_state < 0) return " + errorHandler +
+	                "(actor_cancelled(), " + loopDepthAdjustment + ");");
 
 	// Check if the future is already ready (fast path optimization)
 	func->writeLine("if (" + futureVar + ".isReady()) { if (" + futureVar + ".isError()) return " + errorHandler + "(" +
-	                futureVar + ".getError(), " + loopDepthAdjustment + "); else return " + whenMethodName + "(" + futureVar + ".get(), loopDepth); };");
+	                futureVar + ".getError(), " + loopDepthAdjustment + "); else return " + whenMethodName + "(" +
+	                futureVar + ".get(), loopDepth); };");
 
 	// Future not ready - set up async callback and suspend
 	func->writeLine("static_cast<" + className + "*>(this)->actor_wait_state = " + std::to_string(cbIndex + 1) + ";");
 	func->writeLine(futureVar + ".addCallbackAndClear(static_cast<ActorCallback< " + className + ", " +
-	                std::to_string(cbIndex) + ", " + stmt->result.type + " >*>(static_cast<" + className + "*>(this)));");
+	                std::to_string(cbIndex) + ", " + stmt->result.type + " >*>(static_cast<" + className +
+	                "*>(this)));");
 	func->writeLine("loopDepth = 0;");
 
 	// Now generate the when methods (const& and && overloads) and continuation
@@ -807,8 +815,8 @@ void ActorCompiler::compileStatement(Function* func, ChooseStatement* stmt, cons
 		cb.resultIsState = wait->resultIsState;
 		cb.errorHandler = ctx.catchHandler.empty() ? "a_body1Catch1" : ctx.catchHandler;
 		cb.errorVarName = "error";
-		cb.isChooseWhen = true;  // Mark as part of choose/when block
-		cb.chooseExitMethod = "a_exitChoose1";  // Shared exit method for all choose/when callbacks
+		cb.isChooseWhen = true; // Mark as part of choose/when block
+		cb.chooseExitMethod = "a_exitChoose1"; // Shared exit method for all choose/when callbacks
 		callbacks.push_back(cb);
 	}
 
@@ -826,12 +834,16 @@ void ActorCompiler::compileStatement(Function* func, ChooseStatement* stmt, cons
 
 		// Check cancellation only for first future
 		if (i == 0) {
-			func->writeLine("if (static_cast<" + className + "*>(this)->actor_wait_state < 0) return " + errorHandler + "(actor_cancelled(), loopDepth);");
+			// Emit line directive pointing to the choose statement
+			lineNumber(func, stmt->firstSourceLine);
+			func->writeLine("if (static_cast<" + className + "*>(this)->actor_wait_state < 0) return " + errorHandler +
+			                "(actor_cancelled(), loopDepth);");
 		}
 
 		// Check if ready (fast path)
-		func->writeLine("if (" + futureVar + ".isReady()) { if (" + futureVar + ".isError()) return " + errorHandler + "(" +
-		                futureVar + ".getError(), loopDepth); else return " + whenMethodNames[i] + "(" + futureVar + ".get(), loopDepth); };");
+		func->writeLine("if (" + futureVar + ".isReady()) { if (" + futureVar + ".isError()) return " + errorHandler +
+		                "(" + futureVar + ".getError(), loopDepth); else return " + whenMethodNames[i] + "(" +
+		                futureVar + ".get(), loopDepth); };");
 	}
 
 	// Set up callbacks for all futures
@@ -843,7 +855,8 @@ void ActorCompiler::compileStatement(Function* func, ChooseStatement* stmt, cons
 		// Emit line directive for addCallback
 		lineNumber(func, wait->firstSourceLine);
 		func->writeLine(futureVar + ".addCallbackAndClear(static_cast<ActorCallback< " + className + ", " +
-		                std::to_string(callbackIndices[i]) + ", " + wait->result.type + " >*>(static_cast<" + className + "*>(this)));");
+		                std::to_string(callbackIndices[i]) + ", " + wait->result.type + " >*>(static_cast<" +
+		                className + "*>(this)));");
 	}
 
 	func->writeLine("loopDepth = 0;");
@@ -904,7 +917,7 @@ void ActorCompiler::compileStatement(Function* func, TryStatement* stmt, const C
 	// Create the catch continuation method
 	Function* catchFunc = getFunction(catchMethodName);
 	catchFunc->returnType = "int";
-	catchFunc->formalParameters = {"const Error& " + errorVarName, "int loopDepth=0"};
+	catchFunc->formalParameters = { "const Error& " + errorVarName, "int loopDepth=0" };
 	catchFunc->endIsUnreachable = true; // We include return in body, don't add another
 
 	// Wrap catch body in try-catch to allow propagation to outer handler
@@ -976,14 +989,14 @@ void ActorCompiler::compileStatement(Function* func, ThrowStatement* stmt, const
 }
 
 void ActorCompiler::generateWhenMethod(const std::string& whenMethodName,
-                                        const std::string& contMethodName,
-                                        const std::string& type,
-                                        const std::string& resultName,
-                                        int cbIndex) {
+                                       const std::string& contMethodName,
+                                       const std::string& type,
+                                       const std::string& resultName,
+                                       int cbIndex) {
 	// Generate const& overload
 	Function* whenFuncConst = getFunction(whenMethodName);
 	whenFuncConst->returnType = "int";
-	whenFuncConst->formalParameters = {type + " const& __" + resultName, "int loopDepth"};
+	whenFuncConst->formalParameters = { type + " const& __" + resultName, "int loopDepth" };
 	if (!resultName.empty()) {
 		whenFuncConst->writeLine(resultName + " = __" + resultName + ";");
 	}
@@ -993,9 +1006,9 @@ void ActorCompiler::generateWhenMethod(const std::string& whenMethodName,
 
 	// Generate && overload (separate function with overload marker)
 	Function* whenFuncMove = getFunction(whenMethodName + "_rvalue");
-	whenFuncMove->name = whenMethodName;  // Same name for overload
+	whenFuncMove->name = whenMethodName; // Same name for overload
 	whenFuncMove->returnType = "int";
-	whenFuncMove->formalParameters = {type + " && __" + resultName, "int loopDepth"};
+	whenFuncMove->formalParameters = { type + " && __" + resultName, "int loopDepth" };
 	if (!resultName.empty()) {
 		whenFuncMove->writeLine(resultName + " = std::move(__" + resultName + ");");
 	}
@@ -1006,7 +1019,7 @@ void ActorCompiler::generateWhenMethod(const std::string& whenMethodName,
 	// Create the continuation method (body will be filled by subsequent compilation)
 	Function* contFunc = getFunction(contMethodName);
 	contFunc->returnType = "int";
-	contFunc->formalParameters = {"int loopDepth"};
+	contFunc->formalParameters = { "int loopDepth" };
 
 	// Generate exitChoose cleanup method
 	std::string exitMethodName = "a_exitChoose" + std::to_string(cbIndex + 1);
@@ -1022,14 +1035,14 @@ void ActorCompiler::generateWhenMethod(const std::string& whenMethodName,
 }
 
 void ActorCompiler::generateWhenMethodForChoose(const std::string& whenMethodName,
-                                                  const std::string& type,
-                                                  const std::string& resultName,
-                                                  Statement* whenBody,
-                                                  const Context& ctx) {
+                                                const std::string& type,
+                                                const std::string& resultName,
+                                                Statement* whenBody,
+                                                const Context& ctx) {
 	// Generate const& overload
 	Function* whenFuncConst = getFunction(whenMethodName);
 	whenFuncConst->returnType = "int";
-	whenFuncConst->formalParameters = {type + " const& " + resultName, "int loopDepth"};
+	whenFuncConst->formalParameters = { type + " const& " + resultName, "int loopDepth" };
 
 	// Compile the when body into this function
 	if (whenBody) {
@@ -1045,9 +1058,9 @@ void ActorCompiler::generateWhenMethodForChoose(const std::string& whenMethodNam
 
 	// Generate && overload (separate function with overload marker)
 	Function* whenFuncMove = getFunction(whenMethodName + "_rvalue");
-	whenFuncMove->name = whenMethodName;  // Same name for overload
+	whenFuncMove->name = whenMethodName; // Same name for overload
 	whenFuncMove->returnType = "int";
-	whenFuncMove->formalParameters = {type + " && " + resultName, "int loopDepth"};
+	whenFuncMove->formalParameters = { type + " && " + resultName, "int loopDepth" };
 
 	// Compile the when body into this function
 	if (whenBody) {
@@ -1063,10 +1076,10 @@ void ActorCompiler::generateWhenMethodForChoose(const std::string& whenMethodNam
 }
 
 void ActorCompiler::compileLoopWithContinuations(Function* func,
-                                                  Statement* loopBody,
-                                                  const std::string& condExpression,
-                                                  const std::string& nextExpression,
-                                                  const Context& ctx) {
+                                                 Statement* loopBody,
+                                                 const std::string& condExpression,
+                                                 const std::string& nextExpression,
+                                                 const Context& ctx) {
 	// Increment loop counter for unique numbering
 	int loopNum = ++loopCounter;
 
@@ -1084,7 +1097,7 @@ void ActorCompiler::compileLoopWithContinuations(Function* func,
 	// Create the loopHead method
 	Function* loopHeadFunc = getFunction(loopHeadName);
 	loopHeadFunc->returnType = "int";
-	loopHeadFunc->formalParameters = {"int loopDepth"};
+	loopHeadFunc->formalParameters = { "int loopDepth" };
 	loopHeadFunc->writeLine("int oldLoopDepth = ++loopDepth;");
 	loopHeadFunc->writeLine("while (loopDepth == oldLoopDepth) loopDepth = " + loopBodyName + "(loopDepth);");
 	loopHeadFunc->writeLine("");
@@ -1094,7 +1107,7 @@ void ActorCompiler::compileLoopWithContinuations(Function* func,
 	// Create the loopBody method
 	Function* loopBodyFunc = getFunction(loopBodyName);
 	loopBodyFunc->returnType = "int";
-	loopBodyFunc->formalParameters = {"int loopDepth"};
+	loopBodyFunc->formalParameters = { "int loopDepth" };
 
 	// Generate condition check and break
 	if (!condExpression.empty()) {
@@ -1110,11 +1123,10 @@ void ActorCompiler::compileLoopWithContinuations(Function* func,
 	// 1. It's inside a loop (loopDepth > 0)
 	// 2. The loop body prefix for naming continuations
 	// 3. Break/continue labels that are method names
-	Context loopCtx = ctx.loopBodyContext(
-		ctx.loopDepth + 1,  // Increment depth for nested loops
-		loopBodyName,       // This becomes the prefix for continuations
-		loopBreakName,      // Break returns to break handler
-		loopHeadName        // Continue returns to loop head
+	Context loopCtx = ctx.loopBodyContext(ctx.loopDepth + 1, // Increment depth for nested loops
+	                                      loopBodyName, // This becomes the prefix for continuations
+	                                      loopBreakName, // Break returns to break handler
+	                                      loopHeadName // Continue returns to loop head
 	);
 
 	compile(loopBodyFunc, loopBody, loopCtx);
@@ -1125,7 +1137,7 @@ void ActorCompiler::compileLoopWithContinuations(Function* func,
 	// This wraps the next continuation in try-catch
 	Function* breakFunc = getFunction(loopBreakName);
 	breakFunc->returnType = "int";
-	breakFunc->formalParameters = {"int loopDepth"};
+	breakFunc->formalParameters = { "int loopDepth" };
 	breakFunc->writeLine("try {");
 	breakFunc->indent(+1);
 
@@ -1160,7 +1172,7 @@ void ActorCompiler::compileLoopWithContinuations(Function* func,
 	// Create the next continuation method for code after the loop
 	Function* nextContFunc = getFunction(nextContName);
 	nextContFunc->returnType = "int";
-	nextContFunc->formalParameters = {"int loopDepth"};
+	nextContFunc->formalParameters = { "int loopDepth" };
 
 	// Set the next continuation as pending so code after the loop goes there
 	pendingContinuation = nextContFunc;
@@ -1285,8 +1297,8 @@ void ActorCompiler::writeActorClass(std::ostream& writer, const std::string& ful
 	auto constructorBlockKey = sourceFile + ":" + actor.name + ":constructor";
 	auto constructorBlockId = getUidFromString(constructorBlockKey);
 	uidObjects[constructorBlockId] = constructorBlockKey;
-	writer << "\t\tstatic constexpr ActorBlockIdentifier __identifier = UID("
-	       << constructorBlockId.first << "UL, " << constructorBlockId.second << "UL);\n";
+	writer << "\t\tstatic constexpr ActorBlockIdentifier __identifier = UID(" << constructorBlockId.first << "UL, "
+	       << constructorBlockId.second << "UL);\n";
 	writer << "\t\tActorExecutionContextHelper __helper(this->activeActorHelper.actorID, __identifier);\n";
 	writer << "\t\t#endif // WITH_ACAC\n";
 
@@ -1342,7 +1354,6 @@ void ActorCompiler::writeActorClass(std::ostream& writer, const std::string& ful
 }
 
 void ActorCompiler::writeStateConstructor(std::ostream& writer) {
-	lineNumber(writer, actor.sourceLine);
 	writer << "\t" << stateClassName << "(";
 	writer << join(parameterList(), ",");
 	writer << ") \n";
@@ -1381,7 +1392,9 @@ void ActorCompiler::writeStateConstructor(std::ostream& writer) {
 		outputLineNumber++;
 	}
 
-	lineNumber(writer, outputLineNumber + 1, generatedFileName);
+	// Emit #line directive to generated file before opening brace
+	// +2 accounts for: (1) the #line directive itself, (2) the opening brace line
+	lineNumber(writer, outputLineNumber + 2, generatedFileName);
 	writer << "\t{\n";
 	outputLineNumber++;
 
@@ -1396,7 +1409,9 @@ void ActorCompiler::writeStateConstructor(std::ostream& writer) {
 }
 
 void ActorCompiler::writeStateDestructor(std::ostream& writer) {
-	writer << "\t~" << stateClassName << "() {\n";
+	writer << "\t~" << stateClassName << "()\n";
+	writer << "\t{\n";
+	writer << "\n";
 
 	// Probe hook if generateProbes is true
 	if (generateProbes) {
@@ -1449,10 +1464,8 @@ void ActorCompiler::writeFunction(std::ostream& writer, Function* func) {
 	// Only a_body methods (not a_cont, not a_when, not a_Catch) should have try-catch
 	bool needsTryCatch = (func->name.find("a_body") == 0 || func->name.find("a_Body") == 0) &&
 	                     func->name.find("Catch") == std::string::npos &&
-	                     func->name.find("cont") == std::string::npos &&
-	                     func->name.find("Cont") == std::string::npos &&
-	                     func->name.find("when") == std::string::npos &&
-	                     func->name.find("When") == std::string::npos;
+	                     func->name.find("cont") == std::string::npos && func->name.find("Cont") == std::string::npos &&
+	                     func->name.find("when") == std::string::npos && func->name.find("When") == std::string::npos;
 
 	// Add try block if needed
 	if (needsTryCatch) {
@@ -1492,7 +1505,7 @@ void ActorCompiler::writeFunction(std::ostream& writer, Function* func) {
 		writer << "\t\t} catch (...) {\n";
 		writer << "\t\t\tloopDepth = a_body1Catch1(unknown_error(), loopDepth);\n";
 		writer << "\t\t}\n";
-		writer << "\n";  // Blank line after catch blocks
+		writer << "\n"; // Blank line after catch blocks
 	}
 
 	// Return statement if not unreachable
@@ -1505,20 +1518,21 @@ void ActorCompiler::writeFunction(std::ostream& writer, Function* func) {
 
 void ActorCompiler::writeStateCallbackMethods(std::ostream& writer, const CallbackInfo& cb) {
 	// Use shared exit method for choose/when callbacks, otherwise generate unique exit method
-	std::string exitMethodName = cb.isChooseWhen ? cb.chooseExitMethod : ("a_exitChoose" + std::to_string(cb.index + 1));
-	std::string whenMethodName = cb.continueLabel;  // This is the when method name
+	std::string exitMethodName =
+	    cb.isChooseWhen ? cb.chooseExitMethod : ("a_exitChoose" + std::to_string(cb.index + 1));
+	std::string whenMethodName = cb.continueLabel; // This is the when method name
 	std::string catchMethodName = cb.errorHandler;
 
 	// a_callback_fire - const& overload
-	writer << "\tvoid a_callback_fire(ActorCallback< " << className << ", " << cb.index << ", " << cb.type
-	       << " >*," << cb.type << " const& value) \n";
+	writer << "\tvoid a_callback_fire(ActorCallback< " << className << ", " << cb.index << ", " << cb.type << " >*,"
+	       << cb.type << " const& value) \n";
 	writer << "\t{\n";
 	writer << "\t\t#ifdef WITH_ACAC\n";
 	auto callbackFireKey = sourceFile + ":" + actor.name + ":callback_fire:" + std::to_string(cb.index);
 	auto callbackFireId = getUidFromString(callbackFireKey);
 	uidObjects[callbackFireId] = callbackFireKey;
-	writer << "\t\tstatic constexpr ActorBlockIdentifier __identifier = UID(" << callbackFireId.first
-	       << "UL, " << callbackFireId.second << "UL);\n";
+	writer << "\t\tstatic constexpr ActorBlockIdentifier __identifier = UID(" << callbackFireId.first << "UL, "
+	       << callbackFireId.second << "UL);\n";
 	writer << "\t\tActorExecutionContextHelper __helper(static_cast<" << className
 	       << "*>(this)->activeActorHelper.actorID, __identifier);\n";
 	writer << "\t\t#endif // WITH_ACAC\n";
@@ -1535,12 +1549,12 @@ void ActorCompiler::writeStateCallbackMethods(std::ostream& writer, const Callba
 	writer << "\t}\n";
 
 	// a_callback_fire - && overload
-	writer << "\tvoid a_callback_fire(ActorCallback< " << className << ", " << cb.index << ", " << cb.type
-	       << " >*," << cb.type << " && value) \n";
+	writer << "\tvoid a_callback_fire(ActorCallback< " << className << ", " << cb.index << ", " << cb.type << " >*,"
+	       << cb.type << " && value) \n";
 	writer << "\t{\n";
 	writer << "\t\t#ifdef WITH_ACAC\n";
-	writer << "\t\tstatic constexpr ActorBlockIdentifier __identifier = UID(" << callbackFireId.first
-	       << "UL, " << callbackFireId.second << "UL);\n";
+	writer << "\t\tstatic constexpr ActorBlockIdentifier __identifier = UID(" << callbackFireId.first << "UL, "
+	       << callbackFireId.second << "UL);\n";
 	writer << "\t\tActorExecutionContextHelper __helper(static_cast<" << className
 	       << "*>(this)->activeActorHelper.actorID, __identifier);\n";
 	writer << "\t\t#endif // WITH_ACAC\n";
@@ -1564,8 +1578,8 @@ void ActorCompiler::writeStateCallbackMethods(std::ostream& writer, const Callba
 	auto callbackErrorKey = sourceFile + ":" + actor.name + ":callback_error:" + std::to_string(cb.index);
 	auto callbackErrorId = getUidFromString(callbackErrorKey);
 	uidObjects[callbackErrorId] = callbackErrorKey;
-	writer << "\t\tstatic constexpr ActorBlockIdentifier __identifier = UID(" << callbackErrorId.first
-	       << "UL, " << callbackErrorId.second << "UL);\n";
+	writer << "\t\tstatic constexpr ActorBlockIdentifier __identifier = UID(" << callbackErrorId.first << "UL, "
+	       << callbackErrorId.second << "UL);\n";
 	writer << "\t\tActorExecutionContextHelper __helper(static_cast<" << className
 	       << "*>(this)->activeActorHelper.actorID, __identifier);\n";
 	writer << "\t\t#endif // WITH_ACAC\n";
@@ -1620,7 +1634,8 @@ void ActorCompiler::emitLineDirective(std::ostream& writer, int line, const std:
 void ActorCompiler::emitLineDirective(Function* func, int line, const std::string& file) {
 	if (lineNumbersEnabled && line > 0) {
 		// Emit with 15 tabs for alignment (matching C# output)
-		func->writeLineUnindented(std::string("\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t#line ") + std::to_string(line) + " \"" + file + "\"");
+		func->writeLineUnindented(std::string("\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t#line ") + std::to_string(line) + " \"" +
+		                          file + "\"");
 	}
 }
 

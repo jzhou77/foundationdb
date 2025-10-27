@@ -87,7 +87,7 @@ void ActorParser::write(std::ostream& writer, const std::string& destFileName) {
 
 			std::ostringstream actorOut;
 			ActorCompiler ac(actor, sourceFile, inBlocks == 0, lineNumbersEnabled, generateProbes);
-			ac.write(actorOut);
+			ac.write(actorOut, outLine);
 			for (const auto& kv : ac.getUidObjects()) {
 				uidObjects.emplace(kv.first, kv.second);
 			}
