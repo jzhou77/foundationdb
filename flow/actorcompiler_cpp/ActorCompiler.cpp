@@ -326,6 +326,47 @@ void ActorCompiler::findState(Statement* stmt) {
 	}
 }
 
+bool ActorCompiler::containsWait(Statement* stmt) {
+	if (!stmt)
+		return false;
+
+	// Check if this is a wait statement
+	if (dynamic_cast<WaitStatement*>(stmt)) {
+		return true;
+	}
+
+	// Recursively check compound statements
+	if (auto* codeBlock = dynamic_cast<CodeBlock*>(stmt)) {
+		for (auto& s : codeBlock->statements) {
+			if (containsWait(s.get()))
+				return true;
+		}
+	} else if (auto* whileStmt = dynamic_cast<WhileStatement*>(stmt)) {
+		return containsWait(whileStmt->body.get());
+	} else if (auto* forStmt = dynamic_cast<ForStatement*>(stmt)) {
+		return containsWait(forStmt->body.get());
+	} else if (auto* rangeForStmt = dynamic_cast<RangeForStatement*>(stmt)) {
+		return containsWait(rangeForStmt->body.get());
+	} else if (auto* loopStmt = dynamic_cast<LoopStatement*>(stmt)) {
+		return containsWait(loopStmt->body.get());
+	} else if (auto* ifStmt = dynamic_cast<IfStatement*>(stmt)) {
+		return containsWait(ifStmt->ifBody.get()) || containsWait(ifStmt->elseBody.get());
+	} else if (auto* tryStmt = dynamic_cast<TryStatement*>(stmt)) {
+		if (containsWait(tryStmt->tryBody.get()))
+			return true;
+		for (auto& catchClause : tryStmt->catches) {
+			if (containsWait(catchClause.body.get()))
+				return true;
+		}
+	} else if (auto* chooseStmt = dynamic_cast<ChooseStatement*>(stmt)) {
+		return containsWait(chooseStmt->body.get());
+	} else if (auto* whenStmt = dynamic_cast<WhenStatement*>(stmt)) {
+		return containsWait(whenStmt->body.get()) || whenStmt->wait != nullptr;
+	}
+
+	return false;
+}
+
 Function* ActorCompiler::getFunction(const std::string& label) {
 	// Check if function already exists
 	auto it = functions.find(label);
@@ -428,7 +469,13 @@ void ActorCompiler::compileStatement(Function* func, BreakStatement* stmt, const
 	if (ctx.breakLabel.empty()) {
 		throw Error(stmt->firstSourceLine, "break statement outside of loop");
 	}
-	func->writeLine("goto " + ctx.breakLabel + ";");
+
+	// If inside a loop with continuation methods, use return to break handler
+	if (ctx.loopDepth > 0) {
+		func->writeLine("return " + ctx.breakLabel + "(loopDepth==0?0:loopDepth-1); // break");
+	} else {
+		func->writeLine("goto " + ctx.breakLabel + ";");
+	}
 }
 
 void ActorCompiler::compileStatement(Function* func, ContinueStatement* stmt, const Context& ctx) {
@@ -436,7 +483,15 @@ void ActorCompiler::compileStatement(Function* func, ContinueStatement* stmt, co
 	if (ctx.continueLabel.empty()) {
 		throw Error(stmt->firstSourceLine, "continue statement outside of loop");
 	}
-	func->writeLine("goto " + ctx.continueLabel + ";");
+
+	// If inside a loop with continuation methods, use return to loop head
+	if (ctx.loopDepth > 0) {
+		func->writeLine("if (loopDepth == 0) return " + ctx.continueLabel + "(0);");
+		func->writeLine("");
+		func->writeLine("return loopDepth;");
+	} else {
+		func->writeLine("goto " + ctx.continueLabel + ";");
+	}
 }
 
 void ActorCompiler::compileStatement(Function* func, CodeBlock* stmt, const Context& ctx) {
@@ -451,18 +506,41 @@ void ActorCompiler::compileStatement(Function* func, CodeBlock* stmt, const Cont
 			pendingContinuation = nullptr;
 		}
 	}
+
+	// If we're inside a loop and ended in a continuation, add loop-back logic
+	if (ctx.loopDepth > 0 && currentFunc != func && !ctx.continueLabel.empty()) {
+		if (!currentFunc->endIsUnreachable) {
+			currentFunc->writeLine("if (loopDepth == 0) return " + ctx.continueLabel + "(0);");
+			currentFunc->writeLine("");
+			currentFunc->writeLine("return loopDepth;");
+			currentFunc->endIsUnreachable = true;
+		}
+	}
 }
 
 void ActorCompiler::compileStatement(Function* func, WaitStatement* stmt, const Context& ctx) {
 	// Generate continuation method names and callback index
 	int cbIndex = nextCallbackIndex();
 	int localWaitIndex = func->getNextWaitIndex();  // Track waits per function for nested naming
-	std::string whenMethodName = func->name + "when" + std::to_string(localWaitIndex);
 
-	// Use continuation index from context if available (e.g., inside try block with catch handler),
-	// otherwise use callback index + 1 for normal waits
-	int contIndex = ctx.continuationIndex > 0 ? ctx.continuationIndex : (cbIndex + 1);
-	std::string contMethodName = "a_body1cont" + std::to_string(contIndex);
+	std::string whenMethodName;
+	std::string contMethodName;
+
+	// If inside a loop, use loop-specific naming
+	if (ctx.loopDepth > 0 && !ctx.loopBodyPrefix.empty()) {
+		// Inside loop: continuations are named relative to loop body
+		// e.g., "a_body1cont1loopBody1when1" and "a_body1cont1loopBody1cont1"
+		whenMethodName = ctx.loopBodyPrefix + "when" + std::to_string(localWaitIndex);
+		contMethodName = ctx.loopBodyPrefix + "cont" + std::to_string(localWaitIndex);
+	} else {
+		// Normal case: use function name + when/cont
+		whenMethodName = func->name + "when" + std::to_string(localWaitIndex);
+
+		// Use continuation index from context if available (e.g., inside try block with catch handler),
+		// otherwise use callback index + 1 for normal waits
+		int contIndex = ctx.continuationIndex > 0 ? ctx.continuationIndex : (cbIndex + 1);
+		contMethodName = "a_body1cont" + std::to_string(contIndex);
+	}
 
 	// If this is a state variable result, ensure it's in stateVariables
 	if (stmt->resultIsState && !stmt->result.name.empty()) {
@@ -489,11 +567,14 @@ void ActorCompiler::compileStatement(Function* func, WaitStatement* stmt, const 
 
 	// Check for cancellation - route to appropriate error handler
 	std::string errorHandler = ctx.catchHandler.empty() ? "a_body1Catch1" : ctx.catchHandler;
-	func->writeLine("if (static_cast<" + className + "*>(this)->actor_wait_state < 0) return " + errorHandler + "(actor_cancelled(), loopDepth);");
+
+	// In loop context, adjust loopDepth for error handling
+	std::string loopDepthAdjustment = ctx.loopDepth > 0 ? "std::max(0, loopDepth - 1)" : "loopDepth";
+	func->writeLine("if (static_cast<" + className + "*>(this)->actor_wait_state < 0) return " + errorHandler + "(actor_cancelled(), " + loopDepthAdjustment + ");");
 
 	// Check if the future is already ready (fast path optimization)
 	func->writeLine("if (" + futureVar + ".isReady()) { if (" + futureVar + ".isError()) return " + errorHandler + "(" +
-	                futureVar + ".getError(), loopDepth); else return " + whenMethodName + "(" + futureVar + ".get(), loopDepth); };");
+	                futureVar + ".getError(), " + loopDepthAdjustment + "); else return " + whenMethodName + "(" + futureVar + ".get(), loopDepth); };");
 
 	// Future not ready - set up async callback and suspend
 	func->writeLine("static_cast<" + className + "*>(this)->actor_wait_state = " + std::to_string(cbIndex + 1) + ";");
@@ -501,7 +582,7 @@ void ActorCompiler::compileStatement(Function* func, WaitStatement* stmt, const 
 	                std::to_string(cbIndex) + ", " + stmt->result.type + " >*>(static_cast<" + className + "*>(this)));");
 	func->writeLine("loopDepth = 0;");
 
-	// Now generate the when methods (const& and && overloads)
+	// Now generate the when methods (const& and && overloads) and continuation
 	generateWhenMethod(whenMethodName, contMethodName, stmt->result.type, stmt->result.name, cbIndex);
 
 	// Set pending continuation so subsequent statements go into the cont method
@@ -562,9 +643,14 @@ void ActorCompiler::compileStatement(Function* func, LoopStatement* stmt, const 
 }
 
 void ActorCompiler::compileStatement(Function* func, ForStatement* stmt, const Context& ctx) {
-	// Simplified for loop compilation
-	// Full implementation would check for waits and create loop continuation functions
+	// Check if loop body contains wait statements
+	if (containsWait(stmt->body.get())) {
+		// Generate continuation methods for loop
+		compileLoopWithContinuations(func, stmt->body.get(), stmt->condExpression, stmt->nextExpression, ctx);
+		return;
+	}
 
+	// Simple loop without waits - use goto-based compilation
 	// Emit init expression
 	if (!stmt->initExpression.empty()) {
 		func->writeLine(stmt->initExpression + ";");
@@ -863,6 +949,110 @@ void ActorCompiler::generateWhenMethod(const std::string& whenMethodName,
 	                    std::to_string(cbIndex) + ", " + type + " >::remove();");
 	exitFunc->writeLine("");
 	exitFunc->endIsUnreachable = true;
+}
+
+void ActorCompiler::compileLoopWithContinuations(Function* func,
+                                                  Statement* loopBody,
+                                                  const std::string& condExpression,
+                                                  const std::string& nextExpression,
+                                                  const Context& ctx) {
+	// Increment loop counter for unique numbering
+	int loopNum = ++loopCounter;
+
+	// Generate unique names for loop continuation methods based on current function
+	std::string loopHeadName = func->name + "loopHead" + std::to_string(loopNum);
+	std::string loopBodyName = func->name + "loopBody" + std::to_string(loopNum);
+	std::string loopBreakName = func->name + "break" + std::to_string(loopNum);
+
+	// In the current function, just call the loop head method
+	func->writeLine("loopDepth = " + loopHeadName + "(loopDepth);");
+	func->writeLine("");
+	func->writeLine("return loopDepth;");
+	func->endIsUnreachable = true;
+
+	// Create the loopHead method
+	Function* loopHeadFunc = getFunction(loopHeadName);
+	loopHeadFunc->returnType = "int";
+	loopHeadFunc->formalParameters = {"int loopDepth"};
+	loopHeadFunc->writeLine("int oldLoopDepth = ++loopDepth;");
+	loopHeadFunc->writeLine("while (loopDepth == oldLoopDepth) loopDepth = " + loopBodyName + "(loopDepth);");
+	loopHeadFunc->writeLine("");
+	loopHeadFunc->writeLine("return loopDepth;");
+	loopHeadFunc->endIsUnreachable = true;
+
+	// Create the loopBody method
+	Function* loopBodyFunc = getFunction(loopBodyName);
+	loopBodyFunc->returnType = "int";
+	loopBodyFunc->formalParameters = {"int loopDepth"};
+
+	// Generate condition check and break
+	if (!condExpression.empty()) {
+		loopBodyFunc->writeLine("if (" + condExpression + ")");
+		loopBodyFunc->writeLine("{");
+		loopBodyFunc->indent(+1);
+		loopBodyFunc->writeLine("return " + loopBreakName + "(loopDepth==0?0:loopDepth-1); // break");
+		loopBodyFunc->indent(-1);
+		loopBodyFunc->writeLine("}");
+	}
+
+	// Compile the loop body with a context that knows:
+	// 1. It's inside a loop (loopDepth > 0)
+	// 2. The loop body prefix for naming continuations
+	// 3. Break/continue labels that are method names
+	Context loopCtx = ctx.loopBodyContext(
+		ctx.loopDepth + 1,  // Increment depth for nested loops
+		loopBodyName,       // This becomes the prefix for continuations
+		loopBreakName,      // Break returns to break handler
+		loopHeadName        // Continue returns to loop head
+	);
+
+	compile(loopBodyFunc, loopBody, loopCtx);
+
+	// loopBodyFunc should be marked unreachable after compiling the wait
+
+	// Create the break handler method
+	// This wraps the next continuation in try-catch
+	Function* breakFunc = getFunction(loopBreakName);
+	breakFunc->returnType = "int";
+	breakFunc->formalParameters = {"int loopDepth"};
+	breakFunc->writeLine("try {");
+	breakFunc->indent(+1);
+
+	// The break handler calls the next continuation after the loop
+	// Create the next continuation method that will hold code after the loop
+	std::string nextContName;
+	if (ctx.loopDepth > 0) {
+		// Inside nested loop - next continuation is relative to outer loop body
+		// This is complex, for now just use cont + cbIndex
+		nextContName = "a_body1cont" + std::to_string(callbackCounter);
+	} else {
+		// Top-level loop in function - next continuation is cont + cbIndex
+		nextContName = "a_body1cont" + std::to_string(callbackCounter);
+	}
+
+	breakFunc->writeLine("return " + nextContName + "(loopDepth);");
+	breakFunc->indent(-1);
+	breakFunc->writeLine("}");
+	breakFunc->writeLine("catch (Error& error) {");
+	breakFunc->indent(+1);
+	breakFunc->writeLine("loopDepth = a_body1Catch1(error, loopDepth);");
+	breakFunc->indent(-1);
+	breakFunc->writeLine("} catch (...) {");
+	breakFunc->indent(+1);
+	breakFunc->writeLine("loopDepth = a_body1Catch1(unknown_error(), loopDepth);");
+	breakFunc->indent(-1);
+	breakFunc->writeLine("}");
+	breakFunc->writeLine("");
+	breakFunc->writeLine("return loopDepth;");
+	breakFunc->endIsUnreachable = true;
+
+	// Create the next continuation method for code after the loop
+	Function* nextContFunc = getFunction(nextContName);
+	nextContFunc->returnType = "int";
+	nextContFunc->formalParameters = {"int loopDepth"};
+
+	// Set the next continuation as pending so code after the loop goes there
+	pendingContinuation = nextContFunc;
 }
 
 // ========== Code Generation Main Methods ==========

@@ -15,6 +15,15 @@ Context Context::loopContext(const std::string& breakLbl, const std::string& con
 	return c;
 }
 
+Context Context::loopBodyContext(int depth, const std::string& bodyPrefix, const std::string& breakLbl, const std::string& continueLbl) const {
+	Context c = *this;
+	c.loopDepth = depth;
+	c.loopBodyPrefix = bodyPrefix;
+	c.breakLabel = breakLbl;
+	c.continueLabel = continueLbl;
+	return c;
+}
+
 Context Context::withCatch(const std::string& errVar, const std::string& errCode, const std::string& handler) const {
 	Context c = *this;
 	c.errorVarName = errVar;

@@ -35,6 +35,10 @@ struct Context {
 	std::string errorCodeVarName; // Error code variable name
 	int continuationIndex = 0; // Continuation index for naming (shared with catch handler)
 
+	// Loop context
+	int loopDepth = 0; // Nesting level of loops (0 = not in loop)
+	std::string loopBodyPrefix; // Prefix for loop body methods (e.g., "a_body1cont1loopBody1")
+
 	// Create an unreachable context
 	static Context createUnreachable() {
 		Context ctx;
@@ -47,6 +51,9 @@ struct Context {
 
 	// Create context for loop
 	Context loopContext(const std::string& breakLbl, const std::string& continueLbl) const;
+
+	// Create context for loop body with depth tracking
+	Context loopBodyContext(int depth, const std::string& bodyPrefix, const std::string& breakLbl, const std::string& continueLbl) const;
 
 	// Create context with new catch handler
 	Context withCatch(const std::string& errVar, const std::string& errCode, const std::string& handler) const;

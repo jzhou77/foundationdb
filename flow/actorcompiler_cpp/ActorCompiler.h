@@ -79,6 +79,7 @@ private:
 	std::vector<CallbackInfo> callbacks; // Collected callbacks for this actor
 	int callbackCounter = 0; // Monotonic counter for callback indices
 	int catchHandlerIndex = 2; // Catch handler counter (starts at 2, Catch1 is outer handler)
+	int loopCounter = 0; // Counter for loop numbering (loopHead1, loopHead2, ...)
 
 	// Track continuation function for code flow after wait statements
 	Function* pendingContinuation = nullptr;
@@ -112,6 +113,9 @@ public:
 private:
 	// State discovery - traverse AST to find state variables
 	void findState(Statement* stmt);
+
+	// Check if statement contains wait statements (for loop continuation detection)
+	bool containsWait(Statement* stmt);
 
 	// Function registry - get or create continuation function by label
 	Function* getFunction(const std::string& label);
@@ -151,6 +155,13 @@ private:
 	                        const std::string& type,
 	                        const std::string& resultName,
 	                        int cbIndex);
+
+	// Generate loop continuation methods for loops containing waits
+	void compileLoopWithContinuations(Function* func,
+	                                  Statement* loopBody,
+	                                  const std::string& condExpression,
+	                                  const std::string& nextExpression,
+	                                  const Context& ctx);
 
 	// Code generation helper methods
 	void writeTemplate(std::ostream& writer);
