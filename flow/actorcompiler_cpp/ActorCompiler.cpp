@@ -458,7 +458,11 @@ void ActorCompiler::compileStatement(Function* func, WaitStatement* stmt, const 
 	int cbIndex = nextCallbackIndex();
 	int localWaitIndex = func->getNextWaitIndex();  // Track waits per function for nested naming
 	std::string whenMethodName = func->name + "when" + std::to_string(localWaitIndex);
-	std::string contMethodName = "a_body1cont" + std::to_string(cbIndex + 1);
+
+	// Use continuation index from context if available (e.g., inside try block with catch handler),
+	// otherwise use callback index + 1 for normal waits
+	int contIndex = ctx.continuationIndex > 0 ? ctx.continuationIndex : (cbIndex + 1);
+	std::string contMethodName = "a_body1cont" + std::to_string(contIndex);
 
 	// If this is a state variable result, ensure it's in stateVariables
 	if (stmt->resultIsState && !stmt->result.name.empty()) {
@@ -741,11 +745,6 @@ void ActorCompiler::compileStatement(Function* func, TryStatement* stmt, const C
 	int catchIndex = nextCatchHandlerIndex();
 	std::string catchMethodName = "a_body1Catch" + std::to_string(catchIndex);
 
-	// Synchronize callback counter with catch handler index to ensure continuations
-	// are numbered correctly. Catch2 uses index 2, so next continuation should be cont2 (not cont1).
-	// Since continuation is named "cont" + (cbIndex+1), we need cbIndex >= catchIndex-1.
-	callbackCounter = std::max(callbackCounter, catchIndex - 1);
-
 	// Create the catch continuation method
 	Function* catchFunc = getFunction(catchMethodName);
 	catchFunc->returnType = "int";
@@ -779,7 +778,9 @@ void ActorCompiler::compileStatement(Function* func, TryStatement* stmt, const C
 	func->indent(+1);
 
 	// Compile try body with context pointing to inner catch handler
+	// Set continuationIndex to match catch handler index so continuations are named correctly
 	Context tryCtx = ctx.withCatch(errorVarName, "unused", catchMethodName);
+	tryCtx.continuationIndex = catchIndex;
 	compile(func, stmt->tryBody.get(), tryCtx);
 
 	func->indent(-1);

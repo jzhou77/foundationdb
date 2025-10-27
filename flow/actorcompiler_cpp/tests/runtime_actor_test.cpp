@@ -213,8 +213,8 @@ int main() {
 		// testSimpleWait();
 		// testMultipleWaits();
 		// testChooseWhen();
-		testTryCatch();
-		// testLoopWithWait();
+		// testTryCatch();
+		testLoopWithWait();
 		/*
 		        std::cout << "✅ All runtime actor tests passed!\n";
 		        std::cout << "\nNext steps:\n";

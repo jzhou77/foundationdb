@@ -33,6 +33,7 @@ struct Context {
 	std::string catchHandler; // Catch handler label
 	std::string errorVarName; // Error variable name
 	std::string errorCodeVarName; // Error code variable name
+	int continuationIndex = 0; // Continuation index for naming (shared with catch handler)
 
 	// Create an unreachable context
 	static Context createUnreachable() {
