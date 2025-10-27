@@ -17,10 +17,12 @@ void Function::indent(int change) {
 
 void Function::writeLine(const std::string& line) {
 	body << indentation << line << '\n';
+	outputLineNumber++;
 }
 
 void Function::writeLineUnindented(const std::string& line) {
 	body << line << '\n';
+	outputLineNumber++;
 }
 
 std::string Function::call(const std::vector<std::string>& parameters) {

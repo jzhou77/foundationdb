@@ -58,6 +58,16 @@ ActorCompiler::ActorCompiler(const Actor& actor,
 	fullClassName = className; // no templates for scaffold
 	stateClassName = className + "State";
 
+	// Compute generated file name by replacing .actor.cpp with .cpp
+	generatedFileName = sourceFile;
+	size_t pos = generatedFileName.find(".actor.cpp");
+	if (pos != std::string::npos) {
+		generatedFileName.replace(pos, 10, ".cpp");
+	} else {
+		// If no .actor.cpp found, just append .g.cpp
+		generatedFileName += ".g.cpp";
+	}
+
 	// Add actor parameters as state variables (they need to be accessible throughout actor lifetime)
 	for (const auto& param : actor.parameters) {
 		stateVariables.insert(param.name);
@@ -215,17 +225,26 @@ void ActorCompiler::write(std::ostream& writer) {
 	// Begin namespace if top-level and no explicit namespace
 	if (isTopLevel && actor.nameSpace.empty()) {
 		writer << "namespace {\n";
+		outputLineNumber++;
 	}
+
+	// Emit line directive pointing to generated file
+	emitLineDirective(writer, outputLineNumber + 1, generatedFileName);
 
 	// ===== Write State Class =====
 	writer << "// This generated class is to be used only via " << actor.name << "()\n";
+	outputLineNumber++;
 	actorcompiler::writeTemplate(writer, actor.templateFormals, actor.sourceLine, lineNumbersEnabled, sourceFile);
 	lineNumber(writer, actor.sourceLine);
 	// Add template parameter for the actor type
 	writer << "template <class " << className << ">\n";
+	outputLineNumber++;
 	lineNumber(writer, actor.sourceLine);
 	writer << "class " << stateClassName << " {\n";
+	outputLineNumber++;
+	emitLineDirective(writer, outputLineNumber + 1, generatedFileName);
 	writer << "public:\n";
+	outputLineNumber++;
 
 	lineNumber(writer, actor.sourceLine);
 	writeStateConstructor(writer);
@@ -234,16 +253,21 @@ void ActorCompiler::write(std::ostream& writer) {
 
 	// State variables with types
 	for (const auto& varName : stateVariables) {
+		lineNumber(writer, actor.sourceLine);
 		auto typeIt = stateVariableTypes.find(varName);
 		if (typeIt != stateVariableTypes.end()) {
 			writer << "\t" << typeIt->second << " " << varName << ";\n";
+			outputLineNumber++;
 		} else {
 			// Fallback if type not tracked (shouldn't happen with proper discovery)
 			writer << "\t// TODO: " << varName << ";\n";
+			outputLineNumber++;
 		}
 	}
+	emitLineDirective(writer, outputLineNumber + 1, generatedFileName);
 
 	writer << "};\n";
+	outputLineNumber++;
 
 	// ===== Write Actor Class =====
 	writeActorClass(writer, fullStateClassName, body);
@@ -428,6 +452,8 @@ void ActorCompiler::compile(Function* func, Statement* stmt, const Context& ctx)
 }
 
 void ActorCompiler::compileStatement(Function* func, PlainOldCodeStatement* stmt, const Context& ctx) {
+	// Emit line directive pointing to source
+	lineNumber(func, stmt->firstSourceLine);
 	// Plain old code just passes through
 	func->writeLine(stmt->code);
 }
@@ -445,6 +471,9 @@ void ActorCompiler::compileStatement(Function* func, StateDeclarationStatement* 
 }
 
 void ActorCompiler::compileStatement(Function* func, ReturnStatement* stmt, const Context& ctx) {
+	// Emit line directive pointing to source
+	lineNumber(func, stmt->firstSourceLine);
+
 	// Generate return statement using SAV (Send And Value) pattern
 	std::string returnType = actor.returnType.empty() ? "Void" : actor.returnType;
 	std::string expression = stmt->expression.empty() ? "Void()" : stmt->expression;
@@ -561,6 +590,9 @@ void ActorCompiler::compileStatement(Function* func, WaitStatement* stmt, const 
 
 	// Use a unique future variable per wait to avoid name collisions
 	std::string futureVar = "__when_expr_" + std::to_string(cbIndex);
+
+	// Emit line directive pointing to source line of the wait expression
+	lineNumber(func, stmt->firstSourceLine);
 
 	// Emit the wait expression assignment to a StrictFuture
 	func->writeLine("StrictFuture<" + stmt->result.type + "> " + futureVar + " = " + stmt->futureExpression + ";");
@@ -777,6 +809,9 @@ void ActorCompiler::compileStatement(Function* func, ChooseStatement* stmt, cons
 	for (size_t i = 0; i < whenStmts.size(); ++i) {
 		WaitStatement* wait = waitStmts[i];
 		std::string futureVar = "__when_expr_" + std::to_string(callbackIndices[i]);
+
+		// Emit line directive for the wait expression
+		lineNumber(func, wait->firstSourceLine);
 		func->writeLine("StrictFuture<" + wait->result.type + "> " + futureVar + " = " + wait->futureExpression + ";");
 
 		// Check cancellation only for first future
@@ -795,6 +830,8 @@ void ActorCompiler::compileStatement(Function* func, ChooseStatement* stmt, cons
 	for (size_t i = 0; i < whenStmts.size(); ++i) {
 		WaitStatement* wait = waitStmts[i];
 		std::string futureVar = "__when_expr_" + std::to_string(callbackIndices[i]);
+		// Emit line directive for addCallback
+		lineNumber(func, wait->firstSourceLine);
 		func->writeLine(futureVar + ".addCallbackAndClear(static_cast<ActorCallback< " + className + ", " +
 		                std::to_string(callbackIndices[i]) + ", " + wait->result.type + " >*>(static_cast<" + className + "*>(this)));");
 	}
@@ -1532,6 +1569,36 @@ void ActorCompiler::writeTemplate(std::ostream& writer) {
 void ActorCompiler::lineNumber(std::ostream& writer, int line) {
 	if (lineNumbersEnabled && line >= 0) {
 		writer << "#line " << line << " \"" << sourceFile << "\"\n";
+		outputLineNumber++;
+	}
+}
+
+void ActorCompiler::lineNumber(std::ostream& writer, int line, const std::string& file) {
+	emitLineDirective(writer, line, file);
+}
+
+void ActorCompiler::lineNumber(Function* func, int line) {
+	if (lineNumbersEnabled && line > 0) {
+		emitLineDirective(func, line, sourceFile);
+	}
+}
+
+void ActorCompiler::lineNumber(Function* func, int line, const std::string& file) {
+	emitLineDirective(func, line, file);
+}
+
+void ActorCompiler::emitLineDirective(std::ostream& writer, int line, const std::string& file) {
+	if (lineNumbersEnabled && line > 0) {
+		// Emit with 15 tabs for alignment (matching C# output)
+		writer << "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t#line " << line << " \"" << file << "\"\n";
+		outputLineNumber++;
+	}
+}
+
+void ActorCompiler::emitLineDirective(Function* func, int line, const std::string& file) {
+	if (lineNumbersEnabled && line > 0) {
+		// Emit with 15 tabs for alignment (matching C# output)
+		func->writeLineUnindented(std::string("\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t#line ") + std::to_string(line) + " \"" + file + "\"");
 	}
 }
 

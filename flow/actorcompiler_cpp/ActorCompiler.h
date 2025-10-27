@@ -86,6 +86,10 @@ private:
 	// Track continuation function for code flow after wait statements
 	Function* pendingContinuation = nullptr;
 
+	// Line number tracking for #line directives
+	int outputLineNumber = 0;  // Track current line in generated output
+	std::string generatedFileName;  // Name of the generated .g.cpp file
+
 public:
 	ActorCompiler(const Actor& actor,
 	              const std::string& sourceFile,
@@ -175,6 +179,11 @@ private:
 	// Code generation helper methods
 	void writeTemplate(std::ostream& writer);
 	void lineNumber(std::ostream& writer, int line);
+	void lineNumber(std::ostream& writer, int line, const std::string& file);
+	void lineNumber(Function* func, int line);
+	void lineNumber(Function* func, int line, const std::string& file);
+	void emitLineDirective(std::ostream& writer, int line, const std::string& file);
+	void emitLineDirective(Function* func, int line, const std::string& file);
 	std::vector<std::string> parameterList() const;
 	std::string getTemplateActuals() const;
 	std::pair<uint64_t, uint64_t> getUidFromString(const std::string& str);

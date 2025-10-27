@@ -207,21 +207,21 @@ void testLoopWithWait() {
 }
 
 int main() {
-	// std::cout << "=== Runtime Actor Test Suite ===\n\n";
+	std::cout << "=== Runtime Actor Test Suite ===\n\n";
 
 	try {
-		// testSimpleWait();
-		// testMultipleWaits();
-		// testChooseWhen();
-		// testTryCatch();
+		testSimpleWait();
+		testMultipleWaits();
+		testChooseWhen();
+		testTryCatch();
 		testLoopWithWait();
-		/*
-		        std::cout << "✅ All runtime actor tests passed!\n";
-		        std::cout << "\nNext steps:\n";
-		        std::cout << "1. Compile test actors with actorcompiler_cpp\n";
-		        std::cout << "2. Try to compile generated .cpp files with g++/clang++\n";
-		        std::cout << "3. Fix any compilation errors in generated code\n";
-		        std::cout << "4. Create test harness that links with Flow library\n";*/
+
+		std::cout << "✅ All runtime actor tests passed!\n";
+		std::cout << "\nNext steps:\n";
+		std::cout << "1. Compile test actors with actorcompiler_cpp\n";
+		std::cout << "2. Try to compile generated .cpp files with g++/clang++\n";
+		std::cout << "3. Fix any compilation errors in generated code\n";
+		std::cout << "4. Create test harness that links with Flow library\n";
 		return 0;
 	} catch (const std::exception& e) {
 		std::cerr << "❌ Test failed with exception: " << e.what() << "\n";

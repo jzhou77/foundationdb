@@ -50,6 +50,10 @@ public:
 	// Get accumulated body text
 	std::string getBodyText() const { return body.str(); }
 
+	// Line number tracking
+	int getOutputLineNumber() const { return outputLineNumber; }
+	void incrementLineNumber() { outputLineNumber++; }
+
 	// Write body to output stream (for testing)
 	void writeToStream(std::ostream& out) const { out << body.str(); }
 
@@ -66,6 +70,7 @@ public:
 
 private:
 	int waitCount = 0;  // Number of waits encountered in this function
+	int outputLineNumber = 0;  // Track output line numbers for #line directives
 	std::ostringstream body;
 	std::string indentation;
 	bool called = false;
