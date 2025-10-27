@@ -73,7 +73,7 @@ void testMultipleWaits() {
 	ActorParser parser(sourceCode, "multiple_waits.actor.cpp", policy, false);
 
 	std::ostringstream output;
-	parser.write(output, "multiple_waits.cpp");
+	parser.write(output, "multiple_waits.actor.g.cpp");
 
 	std::string code = output.str();
 	std::cout << code;
@@ -111,7 +111,7 @@ void testChooseWhen() {
 	ActorParser parser(sourceCode, "choose_when.actor.cpp", policy, false);
 
 	std::ostringstream output;
-	parser.write(output, "choose_when.cpp");
+	parser.write(output, "choose_when.actor.g.cpp");
 
 	std::string code = output.str();
 	std::cout << code;
@@ -149,7 +149,7 @@ void testTryCatch() {
 	ActorParser parser(sourceCode, "try_catch.actor.cpp", policy, false);
 
 	std::ostringstream output;
-	parser.write(output, "try_catch.cpp");
+	parser.write(output, "try_catch.actor.g.cpp");
 
 	std::string code = output.str();
 	std::cout << code;
@@ -170,7 +170,7 @@ void testLoopWithWait() {
 	ActorParser parser(sourceCode, "loop_with_wait.actor.cpp", policy, false);
 
 	std::ostringstream output;
-	parser.write(output, "loop_with_wait.cpp");
+	parser.write(output, "loop_with_wait.actor.g.cpp");
 
 	std::string code = output.str();
 	std::cout << code;

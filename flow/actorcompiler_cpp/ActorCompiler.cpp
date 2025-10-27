@@ -58,11 +58,12 @@ ActorCompiler::ActorCompiler(const Actor& actor,
 	fullClassName = className; // no templates for scaffold
 	stateClassName = className + "State";
 
-	// Compute generated file name by replacing .actor.cpp with .cpp
+	// Compute generated file name by replacing .actor.cpp with .actor.g.cpp
 	generatedFileName = sourceFile;
 	size_t pos = generatedFileName.find(".actor.cpp");
 	if (pos != std::string::npos) {
-		generatedFileName.replace(pos, 10, ".cpp");
+		// Replace ".actor.cpp" with ".actor.g.cpp"
+		generatedFileName.replace(pos, 10, ".actor.g.cpp");
 	} else {
 		// If no .actor.cpp found, just append .g.cpp
 		generatedFileName += ".g.cpp";
@@ -228,9 +229,6 @@ void ActorCompiler::write(std::ostream& writer) {
 		outputLineNumber++;
 	}
 
-	// Emit line directive pointing to generated file
-	emitLineDirective(writer, outputLineNumber + 1, generatedFileName);
-
 	// ===== Write State Class =====
 	writer << "// This generated class is to be used only via " << actor.name << "()\n";
 	outputLineNumber++;
@@ -242,7 +240,6 @@ void ActorCompiler::write(std::ostream& writer) {
 	lineNumber(writer, actor.sourceLine);
 	writer << "class " << stateClassName << " {\n";
 	outputLineNumber++;
-	emitLineDirective(writer, outputLineNumber + 1, generatedFileName);
 	writer << "public:\n";
 	outputLineNumber++;
 
@@ -264,7 +261,6 @@ void ActorCompiler::write(std::ostream& writer) {
 			outputLineNumber++;
 		}
 	}
-	emitLineDirective(writer, outputLineNumber + 1, generatedFileName);
 
 	writer << "};\n";
 	outputLineNumber++;
@@ -1568,8 +1564,7 @@ void ActorCompiler::writeTemplate(std::ostream& writer) {
 
 void ActorCompiler::lineNumber(std::ostream& writer, int line) {
 	if (lineNumbersEnabled && line >= 0) {
-		writer << "#line " << line << " \"" << sourceFile << "\"\n";
-		outputLineNumber++;
+		emitLineDirective(writer, line, sourceFile);
 	}
 }
 
