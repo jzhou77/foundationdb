@@ -75,6 +75,8 @@ private:
 		bool resultIsState{ false }; // Whether resultName is a state member
 		std::string errorHandler; // Error handler label (from Context::catchHandler)
 		std::string errorVarName; // Error variable name (from Context::errorVarName)
+		bool isChooseWhen{ false }; // Whether this callback is part of a choose/when block
+		std::string chooseExitMethod; // Shared exit method for choose/when callbacks
 	};
 	std::vector<CallbackInfo> callbacks; // Collected callbacks for this actor
 	int callbackCounter = 0; // Monotonic counter for callback indices
@@ -155,6 +157,13 @@ private:
 	                        const std::string& type,
 	                        const std::string& resultName,
 	                        int cbIndex);
+
+	// Generate when methods for choose/when statements
+	void generateWhenMethodForChoose(const std::string& whenMethodName,
+	                                  const std::string& type,
+	                                  const std::string& resultName,
+	                                  Statement* whenBody,
+	                                  const Context& ctx);
 
 	// Generate loop continuation methods for loops containing waits
 	void compileLoopWithContinuations(Function* func,

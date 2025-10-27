@@ -710,9 +710,6 @@ void ActorCompiler::compileStatement(Function* func, RangeForStatement* stmt, co
 }
 
 void ActorCompiler::compileStatement(Function* func, ChooseStatement* stmt, const Context& ctx) {
-	// Simplified choose/when implementation
-	// Full implementation would generate callback functions and wire them to futures
-
 	// The choose body should be a CodeBlock containing only WhenStatements
 	CodeBlock* codeBlock = dynamic_cast<CodeBlock*>(stmt->body.get());
 	if (!codeBlock) {
@@ -733,74 +730,100 @@ void ActorCompiler::compileStatement(Function* func, ChooseStatement* stmt, cons
 		throw Error(stmt->firstSourceLine, "'choose' block must contain at least one 'when' statement");
 	}
 
-	func->writeLine("// BEGIN choose block (simplified)");
-	func->writeLine("{");
-	func->indent(+1);
+	// Generate callback indices and when method names for each when clause
+	std::vector<int> callbackIndices;
+	std::vector<std::string> whenMethodNames;
+	std::vector<WaitStatement*> waitStmts;
 
-	// For each when clause, evaluate the future expression
 	for (size_t i = 0; i < whenStmts.size(); ++i) {
 		WhenStatement* when = whenStmts[i];
 		WaitStatement* wait = when->wait.get();
+		if (!wait) {
+			throw Error(when->firstSourceLine, "'when' statement must contain a 'wait' expression");
+		}
 
-		std::string futureVar = "__when_expr_" + std::to_string(i);
+		int cbIndex = nextCallbackIndex();
+		callbackIndices.push_back(cbIndex);
+
+		std::string whenMethodName = func->name + "when" + std::to_string(i + 1);
+		whenMethodNames.push_back(whenMethodName);
+
+		waitStmts.push_back(wait);
+
+		// Add state variables if needed
+		if (wait->resultIsState && !wait->result.name.empty()) {
+			stateVariables.insert(wait->result.name);
+			stateVariableTypes[wait->result.name] = wait->result.type;
+		}
+
+		// Track callback for later class generation
+		CallbackInfo cb;
+		cb.type = wait->result.type;
+		cb.index = cbIndex;
+		cb.continueLabel = whenMethodName;
+		cb.resultName = wait->result.name;
+		cb.resultIsState = wait->resultIsState;
+		cb.errorHandler = ctx.catchHandler.empty() ? "a_body1Catch1" : ctx.catchHandler;
+		cb.errorVarName = "error";
+		cb.isChooseWhen = true;  // Mark as part of choose/when block
+		cb.chooseExitMethod = "a_exitChoose1";  // Shared exit method for all choose/when callbacks
+		callbacks.push_back(cb);
+	}
+
+	// Now generate the choose block in the current function
+	std::string errorHandler = ctx.catchHandler.empty() ? "a_body1Catch1" : ctx.catchHandler;
+
+	// Evaluate all future expressions and check if ready
+	for (size_t i = 0; i < whenStmts.size(); ++i) {
+		WaitStatement* wait = waitStmts[i];
+		std::string futureVar = "__when_expr_" + std::to_string(callbackIndices[i]);
 		func->writeLine("StrictFuture<" + wait->result.type + "> " + futureVar + " = " + wait->futureExpression + ";");
+
+		// Check cancellation only for first future
+		if (i == 0) {
+			func->writeLine("if (static_cast<" + className + "*>(this)->actor_wait_state < 0) return " + errorHandler + "(actor_cancelled(), loopDepth);");
+		}
+
+		// Check if ready (fast path)
+		func->writeLine("if (" + futureVar + ".isReady()) { if (" + futureVar + ".isError()) return " + errorHandler + "(" +
+		                futureVar + ".getError(), loopDepth); else return " + whenMethodNames[i] + "(" + futureVar + ".get(), loopDepth); };");
 	}
 
-	// Check if any future is already ready (fast path)
+	// Set up callbacks for all futures
+	func->writeLine("static_cast<" + className + "*>(this)->actor_wait_state = 1;");
+
+	for (size_t i = 0; i < whenStmts.size(); ++i) {
+		WaitStatement* wait = waitStmts[i];
+		std::string futureVar = "__when_expr_" + std::to_string(callbackIndices[i]);
+		func->writeLine(futureVar + ".addCallbackAndClear(static_cast<ActorCallback< " + className + ", " +
+		                std::to_string(callbackIndices[i]) + ", " + wait->result.type + " >*>(static_cast<" + className + "*>(this)));");
+	}
+
+	func->writeLine("loopDepth = 0;");
+
+	// Generate when methods and their bodies
 	for (size_t i = 0; i < whenStmts.size(); ++i) {
 		WhenStatement* when = whenStmts[i];
-		WaitStatement* wait = when->wait.get();
-		std::string futureVar = "__when_expr_" + std::to_string(i);
+		WaitStatement* wait = waitStmts[i];
 
-		func->writeLine("if (" + futureVar + ".isReady()) {");
-		func->indent(+1);
-
-		// Check for error
-		func->writeLine("if (" + futureVar + ".isError()) {");
-		func->indent(+1);
-		if (!ctx.catchHandler.empty()) {
-			func->writeLine(ctx.errorVarName + " = " + futureVar + ".getError();");
-			func->writeLine("goto " + ctx.catchHandler + ";");
-		} else {
-			func->writeLine("throw " + futureVar + ".getError();");
-		}
-		func->indent(-1);
-		func->writeLine("} else {");
-		func->indent(+1);
-
-		// Extract value and compile body
-		if (wait->resultIsState) {
-			func->writeLine(wait->result.name + " = " + futureVar + ".get();");
-		} else {
-			func->writeLine(wait->result.type + " " + wait->result.name + " = " + futureVar + ".get();");
-		}
-
-		// Compile the when body
-		if (when->body) {
-			compile(func, when->body.get(), ctx);
-		}
-
-		// Jump to end of choose block
-		std::string endLabel = generateLabel();
-		func->writeLine("goto " + endLabel + "; // end of when clause " + std::to_string(i));
-		func->indent(-1);
-		func->writeLine("}");
-		func->indent(-1);
-		func->writeLine("}");
+		generateWhenMethodForChoose(whenMethodNames[i], wait->result.type, wait->result.name, when->body.get(), ctx);
 	}
 
-	// If no future is ready, set up callbacks (simplified with TODO)
-	func->writeLine("// TODO: Set up ActorCallback for all futures");
-	func->writeLine("// actor_wait_state = ...;");
+	// Generate exitChoose method that removes all callbacks
+	std::string exitMethodName = "a_exitChoose1";
+	Function* exitFunc = getFunction(exitMethodName);
+	exitFunc->returnType = "void";
+	exitFunc->formalParameters = {};
+	exitFunc->writeLine("if (static_cast<" + className + "*>(this)->actor_wait_state > 0) static_cast<" + className +
+	                    "*>(this)->actor_wait_state = 0;");
+
 	for (size_t i = 0; i < whenStmts.size(); ++i) {
-		std::string futureVar = "__when_expr_" + std::to_string(i);
-		func->writeLine("// " + futureVar + ".addCallbackAndClear(static_cast<ActorCallback<...>*>(this));");
+		WaitStatement* wait = waitStmts[i];
+		exitFunc->writeLine("static_cast<" + className + "*>(this)->ActorCallback< " + className + ", " +
+		                    std::to_string(callbackIndices[i]) + ", " + wait->result.type + " >::remove();");
 	}
-	func->writeLine("return; // Suspend until one callback fires");
-
-	func->indent(-1);
-	func->writeLine("}");
-	func->writeLine("// END choose block");
+	exitFunc->writeLine("");
+	exitFunc->endIsUnreachable = true;
 }
 
 void ActorCompiler::compileStatement(Function* func, TryStatement* stmt, const Context& ctx) {
@@ -949,6 +972,47 @@ void ActorCompiler::generateWhenMethod(const std::string& whenMethodName,
 	                    std::to_string(cbIndex) + ", " + type + " >::remove();");
 	exitFunc->writeLine("");
 	exitFunc->endIsUnreachable = true;
+}
+
+void ActorCompiler::generateWhenMethodForChoose(const std::string& whenMethodName,
+                                                  const std::string& type,
+                                                  const std::string& resultName,
+                                                  Statement* whenBody,
+                                                  const Context& ctx) {
+	// Generate const& overload
+	Function* whenFuncConst = getFunction(whenMethodName);
+	whenFuncConst->returnType = "int";
+	whenFuncConst->formalParameters = {type + " const& " + resultName, "int loopDepth"};
+
+	// Compile the when body into this function
+	if (whenBody) {
+		compile(whenFuncConst, whenBody, ctx);
+	}
+
+	// Add return if not already unreachable
+	if (!whenFuncConst->endIsUnreachable) {
+		whenFuncConst->writeLine("");
+		whenFuncConst->writeLine("return loopDepth;");
+	}
+	whenFuncConst->endIsUnreachable = true;
+
+	// Generate && overload (separate function with overload marker)
+	Function* whenFuncMove = getFunction(whenMethodName + "_rvalue");
+	whenFuncMove->name = whenMethodName;  // Same name for overload
+	whenFuncMove->returnType = "int";
+	whenFuncMove->formalParameters = {type + " && " + resultName, "int loopDepth"};
+
+	// Compile the when body into this function
+	if (whenBody) {
+		compile(whenFuncMove, whenBody, ctx);
+	}
+
+	// Add return if not already unreachable
+	if (!whenFuncMove->endIsUnreachable) {
+		whenFuncMove->writeLine("");
+		whenFuncMove->writeLine("return loopDepth;");
+	}
+	whenFuncMove->endIsUnreachable = true;
 }
 
 void ActorCompiler::compileLoopWithContinuations(Function* func,
@@ -1210,12 +1274,30 @@ void ActorCompiler::writeActorClass(std::ostream& writer, const std::string& ful
 		writer << "\t\tstatic_cast<Actor<" << (actor.returnType.empty() ? "void" : actor.returnType)
 		       << ">*>(this)->actor_wait_state = -1;\n";
 		writer << "\t\tswitch (wait_state) {\n";
-		// Generate case for each callback using actual callback index
+
+		// For choose/when blocks, all callbacks share the same wait_state (1),
+		// so we only generate one case statement and pick the first callback
+		// to handle the error (they all lead to the same error handler anyway).
+		// For regular callbacks, each has its own wait_state.
+		std::set<int> generatedWaitStates;
+
 		for (size_t i = 0; i < callbacks.size(); ++i) {
 			int cbIndex = callbacks[i].index;
-			writer << "\t\tcase " << (cbIndex + 1) << ": this->a_callback_error(static_cast<ActorCallback<" << className
-			       << ", " << cbIndex << ", " << callbacks[i].type << ">*>(nullptr), actor_cancelled()); break;\n";
+			int waitState = cbIndex + 1;
+
+			// For choose/when callbacks, use wait_state = 1 regardless of callback index
+			if (callbacks[i].isChooseWhen) {
+				waitState = 1;
+			}
+
+			// Only generate one case per wait_state
+			if (generatedWaitStates.find(waitState) == generatedWaitStates.end()) {
+				writer << "\t\tcase " << waitState << ": this->a_callback_error(static_cast<ActorCallback<" << className
+				       << ", " << cbIndex << ", " << callbacks[i].type << ">*>(nullptr), actor_cancelled()); break;\n";
+				generatedWaitStates.insert(waitState);
+			}
 		}
+
 		writer << "\t\t}\n";
 	}
 	writer << "\t}\n";
@@ -1362,7 +1444,8 @@ void ActorCompiler::writeFunction(std::ostream& writer, Function* func) {
 }
 
 void ActorCompiler::writeStateCallbackMethods(std::ostream& writer, const CallbackInfo& cb) {
-	std::string exitMethodName = "a_exitChoose" + std::to_string(cb.index + 1);
+	// Use shared exit method for choose/when callbacks, otherwise generate unique exit method
+	std::string exitMethodName = cb.isChooseWhen ? cb.chooseExitMethod : ("a_exitChoose" + std::to_string(cb.index + 1));
 	std::string whenMethodName = cb.continueLabel;  // This is the when method name
 	std::string catchMethodName = cb.errorHandler;
 
