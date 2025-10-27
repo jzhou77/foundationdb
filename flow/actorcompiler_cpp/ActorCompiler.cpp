@@ -73,6 +73,7 @@ ActorCompiler::ActorCompiler(const Actor& actor,
 	for (const auto& param : actor.parameters) {
 		stateVariables.insert(param.name);
 		stateVariableTypes[param.name] = param.type;
+		stateVariableSourceLines[param.name] = actor.sourceLine; // Parameters come from actor declaration line
 	}
 
 	// Discover state variables in actor body
@@ -250,7 +251,11 @@ void ActorCompiler::write(std::ostream& writer) {
 
 	// State variables with types
 	for (const auto& varName : stateVariables) {
-		lineNumber(writer, actor.sourceLine);
+		// Use the tracked source line for this specific variable
+		auto sourceLineIt = stateVariableSourceLines.find(varName);
+		int sourceLine = (sourceLineIt != stateVariableSourceLines.end()) ? sourceLineIt->second : actor.sourceLine;
+		lineNumber(writer, sourceLine);
+
 		auto typeIt = stateVariableTypes.find(varName);
 		if (typeIt != stateVariableTypes.end()) {
 			writer << "\t" << typeIt->second << " " << varName << ";\n";
@@ -314,6 +319,7 @@ void ActorCompiler::findState(Statement* stmt) {
 	if (auto* stateDecl = dynamic_cast<StateDeclarationStatement*>(stmt)) {
 		stateVariables.insert(stateDecl->decl.name);
 		stateVariableTypes[stateDecl->decl.name] = stateDecl->decl.type;
+		stateVariableSourceLines[stateDecl->decl.name] = stateDecl->firstSourceLine; // Track source line
 		return;
 	}
 
@@ -480,8 +486,16 @@ void ActorCompiler::compileStatement(Function* func, ReturnStatement* stmt, cons
 	                "*>(this)->destroy(); return 0; }");
 
 	// Place return value in SAV using placement new
-	func->writeLine("new (&static_cast<" + className + "*>(this)->SAV< " + returnType + " >::value()) " +
-	                returnType + "(std::move(" + expression + ")); // state_var_RVO");
+	// Only use std::move() if expression is exactly a state variable name
+	bool isStateVariable = stateVariables.find(expression) != stateVariables.end();
+
+	if (isStateVariable) {
+		func->writeLine("new (&static_cast<" + className + "*>(this)->SAV< " + returnType + " >::value()) " +
+		                returnType + "(std::move(" + expression + ")); // state_var_RVO");
+	} else {
+		func->writeLine("new (&static_cast<" + className + "*>(this)->SAV< " + returnType + " >::value()) " +
+		                returnType + "(" + expression + ");");
+	}
 
 	// Cleanup and finish promise
 	func->writeLine("this->~" + stateClassName + "();");
@@ -1182,23 +1196,12 @@ void ActorCompiler::writeActorFunction(std::ostream& writer, const std::string& 
 	}
 	newActor += join(paramNames, ", ") + ")";
 
-	if (generateProbes) {
-		writer << "\t// PROBE_ENTER(\"" << actor.name << "\")\n";
-	}
-
-	// Create the actor instance in a temporary to allow exit probe before return
-	writer << "\tauto __actor_ptr = " << newActor << ";\n";
-
-	if (generateProbes) {
-		writer << "\t// PROBE_EXIT(\"" << actor.name << "\")\n";
-	}
-
 	// Return the actor or just construct it
 	if (!actor.returnType.empty()) {
-		writer << "\treturn Future<" << actor.returnType << ">(__actor_ptr);\n";
+		writer << "\treturn Future<" << actor.returnType << ">(" << newActor << ");\n";
 	} else {
 		// Actor constructed and immediately discarded; side-effects occur via constructor
-		(void)0; // keep consistent structure
+		writer << "\t" << newActor << ";\n";
 	}
 
 	writer << "}\n";
@@ -1339,34 +1342,57 @@ void ActorCompiler::writeActorClass(std::ostream& writer, const std::string& ful
 }
 
 void ActorCompiler::writeStateConstructor(std::ostream& writer) {
-	writer << "\t" << stateClassName << "(" << join(parameterList(), ", ") << ")";
+	lineNumber(writer, actor.sourceLine);
+	writer << "\t" << stateClassName << "(";
+	writer << join(parameterList(), ",");
+	writer << ") \n";
+	outputLineNumber++;
 
-	// Member initializers
+	// Build member initializers using deferred writing (like C#)
+	// This causes #line directives to appear before each initializer line
+	std::string ini;
 	bool firstInitializer = true;
+
 	for (const auto& varName : stateVariables) {
-		// Find the corresponding state variable in actor.parameters or locals
-		// For now, just initialize actor parameters
+		// Find the corresponding state variable in actor.parameters
 		for (const auto& param : actor.parameters) {
 			if (param.name == varName) {
-				if (firstInitializer) {
-					writer << "\n\t  : ";
-					firstInitializer = false;
+				lineNumber(writer, actor.sourceLine);
+
+				if (!firstInitializer) {
+					// Write previous initializer with comma
+					writer << ini << ",\n";
+					outputLineNumber++;
+					ini = "\t    ";
 				} else {
-					writer << ",\n\t    ";
+					ini = "\t  : ";
+					firstInitializer = false;
 				}
-				writer << varName << "(" << varName << ")";
+
+				ini += varName + "(" + varName + ")";
 			}
 		}
 	}
 
-	writer << " {\n";
+	// Write last initializer
+	if (!ini.empty()) {
+		lineNumber(writer, actor.sourceLine);
+		writer << ini << "\n";
+		outputLineNumber++;
+	}
+
+	lineNumber(writer, outputLineNumber + 1, generatedFileName);
+	writer << "\t{\n";
+	outputLineNumber++;
 
 	// Probe hook if generateProbes is true
 	if (generateProbes) {
 		writer << "\t\t// PROBE_CREATE(\"" << actor.name << "\")\n";
+		outputLineNumber++;
 	}
 
 	writer << "\t}\n";
+	outputLineNumber++;
 }
 
 void ActorCompiler::writeStateDestructor(std::ostream& writer) {
@@ -1466,6 +1492,7 @@ void ActorCompiler::writeFunction(std::ostream& writer, Function* func) {
 		writer << "\t\t} catch (...) {\n";
 		writer << "\t\t\tloopDepth = a_body1Catch1(unknown_error(), loopDepth);\n";
 		writer << "\t\t}\n";
+		writer << "\n";  // Blank line after catch blocks
 	}
 
 	// Return statement if not unreachable
