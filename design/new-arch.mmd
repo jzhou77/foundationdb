@@ -1,0 +1,50 @@
+graph TD
+    CP[CommitProxy]
+    Seq[Seq]
+    Resolver[Resolver]
+
+    subgraph TxnLog [Txn Log]
+        L1[(Log 1)]
+        L2[(Log 2)]
+        L3[(Log 3)]
+        L4[(Log 4)]
+    end
+
+    subgraph CommitLogBox [Commit Log]
+        CL[(Commit Logs)]
+    end
+
+    LP1[Log Proxy]
+    LP2[Log Proxy]
+
+    SS1[(SS)]
+    SS2[(SS)]
+
+    %% Control Plane Interactions
+    CP <--> |"① CV"| Seq
+    CP <--> |"② Resolution"| Resolver
+    
+    %% Push Operations
+    CP --> |"① Log Push (batch-UID)"| L1
+    CP --> |"① Log Push (batch-UID)"| L2
+    CP --> |"① Log Push (batch-UID)"| L3
+    CP --> |"① Log Push (batch-UID)"| L4
+
+    CP -.-> |"③ Commit Push (CV, batch-UID)"| CommitLogBox
+
+    %% Log to Proxy Flow
+    L1 <--> LP1
+    L2 <--> LP1
+    L3 <--> LP2
+    L4 <--> LP2
+
+    %% Secondary Inputs
+    CL --> LP2
+    SS1 <--> LP1
+    SS2 <--> LP2
+
+    LP1 ~~~ SS1
+    LP2 ~~~ SS2
+
+    %% style CP fill:#f9f,stroke:#333,stroke-width:2px
+    %% style TxnLog fill:#f0f0f0,stroke-dasharray: 5 5
