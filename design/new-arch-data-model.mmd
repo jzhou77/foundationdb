@@ -1,8 +1,16 @@
 classDiagram
-    TxnBatch: UID batchId
-    TxnBatch: List(Transaction) tranactions
+    class TxnBatch {
+        UID batchId;
+        List~Transaction~ transactions;
+    }
 
-    CommitLog: UID batchId
-    CommitLog: Version CommitVersion
-    CommitLog: Version PreviousCommitVersion
-    CommitLog: List(int) committedTxns
+    class CommitLog {
+        UID batchId;
+        Version CommitVersion;
+        Version PreviousCommitVersion;
+        List~int~ committed;
+    }
+
+    %% Relationship link with a label
+    %% TxnBatch "1" .. "1" CommitLog : linked by batchId
+    TxnBatch --> CommitLog : batchId
