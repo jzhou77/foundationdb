@@ -17,8 +17,12 @@ graph TD
     LP1[Log Proxy]
     LP2[Log Proxy]
 
-    SS1[(SS)]
-    SS2[(SS)]
+    SS1[(SS 1)]
+    SS2[(SS 2)]
+    SS3[(SS 3)]
+    SS4[(SS 4)]
+    SS5[(SS 5)]
+    SS6[(SS 6)]
 
     %% Control Plane Interactions
     CP <--> |"① CV"| Seq
@@ -30,21 +34,27 @@ graph TD
     CP --> |"① Log Push (batch-UID)"| L3
     CP --> |"① Log Push (batch-UID)"| L4
 
-    CP -.-> |"③ Commit Push (CV, batch-UID)"| CommitLogBox
+    CP --> |"③ Commit (CV, batch-UID)"| CommitLogBox
+    CP --> |"④ Commit (CV)"| Seq
 
     %% Log to Proxy Flow
-    L1 <--> LP1
-    L2 <--> LP1
-    L3 <--> LP2
-    L4 <--> LP2
+    L1 --> LP1
+    L2 --> LP1
+    L3 --> LP2
+    L4 --> LP2
 
     %% Secondary Inputs
-    CL --> LP2
-    SS1 <--> LP1
-    SS2 <--> LP2
+    CommitLogBox --> LP1
+    CommitLogBox --> LP2
+    LP1 --> SS1
+    LP1 --> SS2
+    LP1 --> SS3
+    LP2 --> SS4
+    LP2 --> SS5
+    LP2 --> SS6
 
-    LP1 ~~~ SS1
-    LP2 ~~~ SS2
+    %% LP1 ~~~ SS3
+    %% LP2 ~~~ SS2
 
     %% style CP fill:#f9f,stroke:#333,stroke-width:2px
     %% style TxnLog fill:#f0f0f0,stroke-dasharray: 5 5
