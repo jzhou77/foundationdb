@@ -1,0 +1,8 @@
+classDiagram
+    TxnBatch: UID batchId
+    TxnBatch: List(Transaction) tranactions
+
+    CommitLog: UID batchId
+    CommitLog: Version CommitVersion
+    CommitLog: Version PreviousCommitVersion
+    CommitLog: List(int) committedTxns
