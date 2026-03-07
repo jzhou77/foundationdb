@@ -14,3 +14,14 @@ classDiagram
     %% Relationship link with a label
     %% TxnBatch "1" .. "1" CommitLog : linked by batchId
     TxnBatch --> CommitLog : batchId
+
+    class LogProxy {
+        Version currentVersion;
+        "std::map&lt;Version, pair&lt;Version, UID&gt;&gt; versions"; // PCV -> CV, batchId
+
+        ACTOR peekCommitLog();
+        ACTOR peekTxnBatch();
+        ACTOR Index();
+        ACTOR SSPeek(tag, beginVersion);
+        ACTOR SSPop(tag, version);
+    }
