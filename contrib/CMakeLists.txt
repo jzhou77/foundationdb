@@ -14,3 +14,6 @@ if(NOT WIN32)
   add_subdirectory(debug_determinism)
   add_subdirectory(monitoring)
 endif()
+
+add_executable(disk_write_bench_flow disk_write_bench_flow.cpp)
+target_link_libraries(disk_write_bench_flow PRIVATE flow fdbrpc)
