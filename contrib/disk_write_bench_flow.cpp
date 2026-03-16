@@ -36,8 +36,17 @@
 // Benchmark parameters
 // ---------------------------------------------------------------------------
 
+// On Linux with --direct, writes go through AsyncFileKAIO (kernel AIO via
+// io_submit/eventfd), bypassing the EIO thread pool entirely.  O_DIRECT
+// requires all sizes and offsets to be multiples of DIRECT_IO_ALIGN.
+static constexpr int DIRECT_IO_ALIGN = 4096;
 static constexpr int MIN_WRITE_BYTES = 100 * 1024;  // 100 KB
 static constexpr int MAX_WRITE_BYTES = 1024 * 1024; // 1 MB
+
+// Round n up to the nearest multiple of align (align must be a power of 2).
+static inline int alignUp(int n, int align) {
+	return (n + align - 1) & ~(align - 1);
+}
 
 // ---------------------------------------------------------------------------
 // Per-worker stats (single-threaded Flow, no locking needed)
@@ -55,7 +64,7 @@ struct WorkerStats {
 // Writer coroutine
 // ---------------------------------------------------------------------------
 
-Future<Void> writerActor(int id, std::string dir, double deadline, WorkerStats* stats) {
+Future<Void> writerActor(int id, std::string dir, double deadline, bool directIO, WorkerStats* stats) {
 	std::string path = dir + "/disk_write_bench_" + std::to_string(id) + ".bin";
 
 	try {
@@ -66,26 +75,39 @@ Future<Void> writerActor(int id, std::string dir, double deadline, WorkerStats* 
 			// Ignore – file may not exist yet.
 		}
 
-		Reference<IAsyncFile> file =
-		    co_await IAsyncFileSystem::filesystem()->open(path, IAsyncFile::OPEN_READWRITE | IAsyncFile::OPEN_CREATE, 0644);
+		// OPEN_UNCACHED | OPEN_UNBUFFERED on Linux → AsyncFileKAIO (kernel AIO,
+		// no EIO thread pool for writes).  Requires 4 KB-aligned buf/offset/size.
+		// On macOS these flags are accepted but still route through EIO.
+		int64_t openFlags = IAsyncFile::OPEN_READWRITE | IAsyncFile::OPEN_CREATE;
+		if (directIO)
+			openFlags |= IAsyncFile::OPEN_UNCACHED | IAsyncFile::OPEN_UNBUFFERED;
 
-		// Prepare a max-sized buffer filled with random bytes once.
-		std::vector<uint8_t> buf(MAX_WRITE_BYTES);
-		deterministicRandom()->randomBytes(buf.data(), MAX_WRITE_BYTES);
+		Reference<IAsyncFile> file = co_await IAsyncFileSystem::filesystem()->open(path, openFlags, 0644);
+
+		// Allocate a page-aligned buffer (required for O_DIRECT).
+		const int bufSize = directIO ? alignUp(MAX_WRITE_BYTES, DIRECT_IO_ALIGN) : MAX_WRITE_BYTES;
+		void* rawBuf = nullptr;
+		if (posix_memalign(&rawBuf, DIRECT_IO_ALIGN, bufSize) != 0)
+			throw std::bad_alloc();
+		std::unique_ptr<void, decltype(&free)> bufGuard(rawBuf, free);
+		uint8_t* buf = static_cast<uint8_t*>(rawBuf);
+		deterministicRandom()->randomBytes(buf, bufSize);
 
 		int64_t offset = 0;
 
 		while (now() < deadline) {
 			int writeSize = deterministicRandom()->randomInt(MIN_WRITE_BYTES, MAX_WRITE_BYTES + 1);
+			// O_DIRECT requires size and offset to be multiples of the block size.
+			if (directIO)
+				writeSize = alignUp(writeSize, DIRECT_IO_ALIGN);
 
-			co_await file->write(buf.data(), writeSize, offset);
+			co_await file->write(buf, writeSize, offset);
 			offset += writeSize;
 
 			double syncStart = now();
-			// On macOS this dispatches F_FULLFSYNC via the EIO thread pool.
-			// On Linux this dispatches fdatasync via the EIO thread pool.
-			// Either way, the coroutine suspends while the sync is in progress,
-			// allowing other writers to issue their own I/O concurrently.
+			// sync() on Linux/kaio still goes through EIO (kernel AIO's IOCB_CMD_FDSYNC
+			// is not reliably supported), so this remains the bottleneck at high iodepth.
+			// On macOS: F_FULLFSYNC via EIO thread pool regardless of directIO.
 			co_await file->sync();
 			double syncElapsed = now() - syncStart;
 
@@ -110,8 +132,9 @@ Future<Void> writerActor(int id, std::string dir, double deadline, WorkerStats* 
 // Top-level benchmark coroutine
 // ---------------------------------------------------------------------------
 
-Future<Void> runBench(std::string dir, int iodepth, double durationSecs) {
-	printf("iodepth: %d  dir: %s  duration: %.0f s\n\n", iodepth, dir.c_str(), durationSecs);
+Future<Void> runBench(std::string dir, int iodepth, double durationSecs, bool directIO) {
+	printf("iodepth: %d  dir: %s  duration: %.0f s  direct-io: %s\n\n",
+	       iodepth, dir.c_str(), durationSecs, directIO ? "yes (kaio on Linux)" : "no (EIO)");
 
 	double startTime = now();
 	double deadline = startTime + durationSecs;
@@ -121,7 +144,7 @@ Future<Void> runBench(std::string dir, int iodepth, double durationSecs) {
 	workers.reserve(iodepth);
 
 	for (int i = 0; i < iodepth; i++) {
-		workers.push_back(writerActor(i, dir, deadline, &stats[i]));
+		workers.push_back(writerActor(i, dir, deadline, directIO, &stats[i]));
 	}
 
 	co_await waitForAll(workers);
@@ -171,16 +194,22 @@ Future<Void> runBench(std::string dir, int iodepth, double durationSecs) {
 // ---------------------------------------------------------------------------
 
 static void usage(const char* prog) {
-	fprintf(stderr, "Usage: %s [--iodepth N] [--dir PATH] [--duration SECS]\n", prog);
+	fprintf(stderr, "Usage: %s [--iodepth N] [--dir PATH] [--duration SECS] [--direct]\n", prog);
 	fprintf(stderr, "  --iodepth  N     concurrent writer coroutines (default: 1)\n");
 	fprintf(stderr, "  --dir      PATH  directory for temp files     (default: /tmp)\n");
 	fprintf(stderr, "  --duration SECS  benchmark duration in seconds (default: 60)\n");
+	fprintf(stderr, "  --direct         use O_DIRECT + kernel AIO on Linux (kaio path,\n");
+	fprintf(stderr, "                   no EIO thread pool for writes; sizes rounded up\n");
+	fprintf(stderr, "                   to 4 KB alignment; no effect on macOS)\n");
 }
+
+extern "C" void eio_set_max_parallel(unsigned int nthreads); // from libeio
 
 int main(int argc, char* argv[]) {
 	int iodepth = 1;
 	std::string dir = "/tmp";
 	double durationSecs = 60.0;
+	bool directIO = false;
 
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--iodepth") == 0 && i + 1 < argc) {
@@ -189,6 +218,8 @@ int main(int argc, char* argv[]) {
 			dir = argv[++i];
 		} else if (strcmp(argv[i], "--duration") == 0 && i + 1 < argc) {
 			durationSecs = atof(argv[++i]);
+		} else if (strcmp(argv[i], "--direct") == 0) {
+			directIO = true;
 		} else {
 			usage(argv[0]);
 			return 1;
@@ -207,8 +238,13 @@ int main(int argc, char* argv[]) {
 	platformInit();
 	g_network = newNet2(TLSConfig(), /*useThreadPool=*/false, /*useMetrics=*/true);
 	Net2FileSystem::newFileSystem(/*cacheSize=*/-1, /*folder=*/"");
+	// EIO_MAX_PARALLELISM defaults to 4. With iodepth > 4, syncs queue up behind
+	// the thread pool and serialise. Raise it to match iodepth so all workers
+	// can have a sync in-flight at the same time.
+	// eio_set_max_parallel() is safe to call after init and takes effect immediately.
+	eio_set_max_parallel(static_cast<unsigned int>(std::max(iodepth, 4)));
 
-	auto f = stopAfter(runBench(dir, iodepth, durationSecs));
+	auto f = stopAfter(runBench(dir, iodepth, durationSecs, directIO));
 	g_network->run();
 
 	return 0;
