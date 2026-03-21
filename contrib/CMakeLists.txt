@@ -17,3 +17,13 @@ endif()
 
 add_executable(disk_write_bench_flow disk_write_bench_flow.cpp)
 target_link_libraries(disk_write_bench_flow PRIVATE flow fdbrpc)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  find_library(URING_LIB uring)
+  if(URING_LIB)
+    add_executable(disk_write_bench_uring disk_write_bench_uring.cpp)
+    target_link_libraries(disk_write_bench_uring PRIVATE ${URING_LIB})
+  else()
+    message(STATUS "liburing not found — skipping disk_write_bench_uring")
+  endif()
+endif()
